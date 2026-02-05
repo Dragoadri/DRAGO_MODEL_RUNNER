@@ -14,8 +14,6 @@
 ║                                                               ║
 ╚═══════════════════════════════════════════════════════════════╝
 
-
-
 A Matrix-styled application for managing and running local LLM models
 with Ollama. Features include:
 
