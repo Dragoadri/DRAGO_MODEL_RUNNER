@@ -22,6 +22,7 @@ from .widgets import (
 )
 from ..core import GGUFManager, ModelConfig, ModelParameters, OllamaClient
 from ..core.model_config import SYSTEM_PROMPTS
+from .system_panel import SystemInfo, estimate_model_performance
 
 
 class DropZone(ctk.CTkFrame):
@@ -143,8 +144,59 @@ class DropZone(ctk.CTkFrame):
         self.file_label.configure(text=f"{filename}\n[{size_gb:.2f} GB]")
         self.configure(border_color=COLORS["success"])
 
+        # Estimate performance
+        self._show_performance_estimate(size_gb)
+
         if self.on_file_dropped:
             self.on_file_dropped(file_path)
+
+    def _show_performance_estimate(self, size_gb: float):
+        """Show performance estimate for the model"""
+        import threading
+
+        def analyze():
+            gpu_info = SystemInfo.get_gpu_info()
+            mem_info = SystemInfo.get_memory_info()
+            estimate = estimate_model_performance(size_gb, gpu_info, mem_info)
+
+            def update():
+                # Create or update performance label
+                if hasattr(self, 'perf_label'):
+                    self.perf_label.destroy()
+
+                rating = estimate["speed_rating"]
+                colors = {
+                    "EXCELENTE": COLORS["success"],
+                    "MUY BUENO": COLORS["success"],
+                    "BUENO": COLORS["matrix_green"],
+                    "ACEPTABLE": COLORS["warning"],
+                    "LENTO": COLORS["accent_orange"],
+                    "MUY LENTO": COLORS["error"],
+                    "NO PUEDE EJECUTAR": COLORS["error"],
+                }
+
+                color = colors.get(rating, COLORS["text_muted"])
+
+                perf_text = f"\n{DECORATIONS['arrow_r']} Rendimiento: {rating}"
+                if estimate["will_use_gpu"]:
+                    perf_text += f" (GPU)"
+                else:
+                    perf_text += f" (CPU)"
+
+                if estimate["warnings"]:
+                    perf_text += f"\n{DECORATIONS['circle']} {estimate['warnings'][0][:50]}"
+
+                self.perf_label = ctk.CTkLabel(
+                    self.winfo_children()[0],  # content frame
+                    text=perf_text,
+                    font=ctk.CTkFont(family="Consolas", size=11),
+                    text_color=color
+                )
+                self.perf_label.pack(pady=(5, 0))
+
+            self.after(0, update)
+
+        threading.Thread(target=analyze, daemon=True).start()
 
     def reset(self):
         """Reset to initial state"""
@@ -154,6 +206,8 @@ class DropZone(ctk.CTkFrame):
         self.sub_label.configure(text="o haz clic para explorar")
         self.file_label.configure(text="")
         self.configure(border_color=COLORS["matrix_green_dim"])
+        if hasattr(self, 'perf_label'):
+            self.perf_label.destroy()
 
 
 class ModelCard(ctk.CTkFrame):

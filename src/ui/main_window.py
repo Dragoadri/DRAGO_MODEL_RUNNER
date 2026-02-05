@@ -14,6 +14,8 @@ from .widgets import (
 from .chat_panel import ChatPanel
 from .model_manager import ModelManagerPanel
 from .settings_panel import SettingsPanel
+from .help_panel import HelpPanel
+from .system_panel import SystemPanel
 from ..core import OllamaClient, GGUFManager
 
 
@@ -193,6 +195,8 @@ class Sidebar(ctk.CTkFrame):
         nav_items = [
             ("chat", f"{DECORATIONS['prompt']} NEURAL CHAT", True),
             ("models", f"{DECORATIONS['block']} MODEL FORGE", False),
+            ("system", f"{DECORATIONS['block_med']} SISTEMA", False),
+            ("help", f"{DECORATIONS['circle']} AYUDA/FAQ", False),
             ("settings", f"{DECORATIONS['arrow_r']} CONFIG", False),
         ]
 
@@ -350,6 +354,10 @@ class MainWindow(ctk.CTk):
             on_model_created=self._on_model_created
         )
 
+        self.system_panel = SystemPanel(self.content_frame)
+
+        self.help_panel = HelpPanel(self.content_frame)
+
         self.settings_panel = SettingsPanel(
             self.content_frame,
             self.config_path,
@@ -460,11 +468,15 @@ class MainWindow(ctk.CTk):
         """Show specified panel"""
         self.chat_panel.grid_remove()
         self.models_panel.grid_remove()
+        self.system_panel.grid_remove()
+        self.help_panel.grid_remove()
         self.settings_panel.grid_remove()
 
         panels = {
             "chat": self.chat_panel,
             "models": self.models_panel,
+            "system": self.system_panel,
+            "help": self.help_panel,
             "settings": self.settings_panel,
         }
 
