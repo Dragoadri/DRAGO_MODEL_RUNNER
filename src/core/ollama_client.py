@@ -141,36 +141,66 @@ class OllamaClient:
 
         return models
 
+    @staticmethod
+    def _clean_ollama_output(line: str) -> str:
+        """Extract clean status text from ollama CLI output with ANSI codes and spinners."""
+        import re
+        # Strip all ANSI escape sequences
+        clean = re.sub(r'\x1b\[[0-9;]*[a-zA-Z]', '', line)
+        # Strip terminal control sequences like [?25l, [1G, [K, [2K, [A
+        clean = re.sub(r'\[\?[0-9]*[a-zA-Z]', '', clean)
+        clean = re.sub(r'\[\d*[A-Z]', '', clean)
+        # Strip spinner characters
+        clean = re.sub(r'[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏⠋⠉⠈⠐⠠⠤⠆]', '', clean)
+        # Collapse whitespace
+        clean = re.sub(r'\s+', ' ', clean).strip()
+
+        # Extract most meaningful part: prefer lines with percentage
+        # e.g. "gathering model components copying file sha256:abc... 45%"
+        pct_match = re.search(r'(\d+%)', clean)
+        # Find the last meaningful status phrase
+        parts = clean.split('gathering model components')
+        last_part = parts[-1].strip() if len(parts) > 1 else clean
+
+        if not last_part and len(parts) > 1:
+            last_part = "gathering model components"
+
+        # Truncate long sha256 hashes for display
+        last_part = re.sub(r'sha256:[a-f0-9]{20,}', 'sha256:...', last_part)
+
+        return last_part.strip()
+
     def create_model(
         self,
         name: str,
         modelfile_path: Path,
         progress_callback: Optional[Callable[[str], None]] = None
     ) -> bool:
-        """Create a new model from a Modelfile"""
-        try:
-            modelfile_content = Path(modelfile_path).read_text()
+        """Create a new model from a Modelfile.
 
-            if self._client:
-                # Use streaming to get progress
-                for progress in self._client.create(
-                    model=name,
-                    modelfile=modelfile_content,
-                    stream=True
-                ):
-                    if progress_callback:
-                        status = progress.get("status", "")
-                        progress_callback(status)
-                return True
-            else:
-                # Fallback to subprocess
-                result = subprocess.run(
-                    ["ollama", "create", name, "-f", str(modelfile_path)],
-                    capture_output=True,
-                    text=True,
-                    timeout=300
-                )
-                return result.returncode == 0
+        Always uses subprocess with 'ollama create -f' because Ollama >= 0.15
+        removed the 'modelfile' API parameter and the new 'from_' parameter
+        only accepts model names, not filesystem paths to GGUF files.
+        """
+        try:
+            process = subprocess.Popen(
+                ["ollama", "create", name, "-f", str(modelfile_path)],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True
+            )
+
+            last_status = ""
+            for line in iter(process.stdout.readline, ''):
+                if not line.strip():
+                    continue
+                clean = self._clean_ollama_output(line)
+                if clean and clean != last_status and progress_callback:
+                    last_status = clean
+                    progress_callback(clean)
+
+            process.wait(timeout=600)
+            return process.returncode == 0
         except Exception as e:
             print(f"Error creating model: {e}")
             return False

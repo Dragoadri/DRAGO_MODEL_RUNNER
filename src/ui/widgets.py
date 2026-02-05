@@ -98,7 +98,7 @@ class MatrixFrame(ctk.CTkFrame):
 
 
 class MatrixScrollableFrame(ctk.CTkScrollableFrame):
-    """Matrix-styled scrollable frame"""
+    """Matrix-styled scrollable frame with Linux mousewheel support"""
 
     def __init__(self, parent, **kwargs):
         kwargs.setdefault("fg_color", COLORS["bg_secondary"])
@@ -109,6 +109,41 @@ class MatrixScrollableFrame(ctk.CTkScrollableFrame):
         kwargs.setdefault("scrollbar_button_hover_color", COLORS["matrix_green_dim"])
 
         super().__init__(parent, **kwargs)
+
+        # Bind mousewheel for Linux (Button-4=up, Button-5=down) and Windows/Mac
+        self._bind_mousewheel_recursive(self)
+        self.bind("<Configure>", lambda e: self._bind_mousewheel_recursive(self), add="+")
+
+    def _on_mousewheel(self, event):
+        """Handle mousewheel scroll across platforms"""
+        try:
+            canvas = self._parent_canvas
+            # Check if content is taller than visible area
+            if canvas.bbox("all") is None:
+                return
+            content_height = canvas.bbox("all")[3]
+            visible_height = canvas.winfo_height()
+            if content_height <= visible_height:
+                return
+
+            if event.num == 4:  # Linux scroll up
+                canvas.yview_scroll(-3, "units")
+            elif event.num == 5:  # Linux scroll down
+                canvas.yview_scroll(3, "units")
+            elif hasattr(event, 'delta'):  # Windows/Mac
+                canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        except Exception:
+            pass
+
+    def _bind_mousewheel_recursive(self, widget):
+        """Bind mousewheel events to widget and all its children"""
+        # Linux
+        widget.bind("<Button-4>", self._on_mousewheel, add="+")
+        widget.bind("<Button-5>", self._on_mousewheel, add="+")
+        # Windows/Mac
+        widget.bind("<MouseWheel>", self._on_mousewheel, add="+")
+        for child in widget.winfo_children():
+            self._bind_mousewheel_recursive(child)
 
 
 class MatrixComboBox(ctk.CTkComboBox):

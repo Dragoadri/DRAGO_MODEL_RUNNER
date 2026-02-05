@@ -189,9 +189,18 @@ Designed for running uncensored models locally.
             font=ctk.CTkFont(family="Consolas", size=12),
             text_color=COLORS["text_muted"],
             justify="left",
-            anchor="w"
+            anchor="w",
+            wraplength=600
         )
-        about_label.pack(padx=20, pady=15)
+        about_label.pack(fill="x", padx=20, pady=15)
+
+        def _update_about_wrap(event=None):
+            try:
+                about_label.configure(wraplength=max(200, about_section.winfo_width() - 60))
+            except Exception:
+                pass
+
+        about_section.bind("<Configure>", _update_about_wrap, add="+")
 
         # === SAVE BUTTON ===
         save_frame = ctk.CTkFrame(content, fg_color="transparent")

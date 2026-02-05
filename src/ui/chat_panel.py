@@ -121,11 +121,14 @@ class ChatMessage(ctk.CTkFrame):
             text=display_content,
             font=ctk.CTkFont(family="Consolas", size=14),
             text_color=COLORS["text_white"] if is_user else COLORS["matrix_green"],
-            wraplength=700,
+            wraplength=500,
             justify="left",
             anchor="w"
         )
         self.content_label.grid(row=2, column=0, sticky="ew", padx=12, pady=(4, 12))
+
+        # Update wraplength dynamically when resized
+        self.bind("<Configure>", self._update_wraplength, add="+")
 
     def _copy_content(self):
         """Copy message content to clipboard"""
@@ -141,6 +144,14 @@ class ChatMessage(ctk.CTkFrame):
         except Exception:
             self.copy_btn.configure(text="ERR")
             self.after(1500, lambda: self.copy_btn.configure(text="COPY"))
+
+    def _update_wraplength(self, event=None):
+        """Dynamically adjust wraplength based on widget width"""
+        try:
+            new_wrap = max(200, self.winfo_width() - 50)
+            self.content_label.configure(wraplength=new_wrap)
+        except Exception:
+            pass
 
     def update_content(self, content: str):
         """Update message content (for streaming)"""
@@ -323,14 +334,24 @@ Comandos:
 {DECORATIONS['h_line'] * 40}
         """
 
-        ctk.CTkLabel(
+        welcome_label = ctk.CTkLabel(
             welcome_frame,
             text=welcome_text,
             font=ctk.CTkFont(family="Consolas", size=13),
             text_color=COLORS["matrix_green_dim"],
             justify="left",
-            anchor="w"
-        ).pack(padx=20, pady=15)
+            anchor="w",
+            wraplength=600
+        )
+        welcome_label.pack(fill="x", padx=20, pady=15)
+
+        def _update_welcome_wrap(event=None):
+            try:
+                welcome_label.configure(wraplength=max(200, welcome_frame.winfo_width() - 60))
+            except Exception:
+                pass
+
+        welcome_frame.bind("<Configure>", _update_welcome_wrap, add="+")
 
         self._welcome_widget = welcome_frame
 

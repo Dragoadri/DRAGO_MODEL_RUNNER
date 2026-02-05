@@ -84,25 +84,53 @@ class DropZone(ctk.CTkFrame):
             content,
             text="",
             font=ctk.CTkFont(family="Consolas", size=12),
-            text_color=COLORS["matrix_green_bright"]
+            text_color=COLORS["matrix_green_bright"],
+            wraplength=350
         )
         self.file_label.pack(pady=(10, 0))
 
-        # Bind click
-        self.bind("<Button-1>", self._on_click)
-        for child in self.winfo_children():
-            child.bind("<Button-1>", self._on_click)
+        # Bind click recursively to all children
+        self._bind_click_recursive(self)
+
+    def _bind_click_recursive(self, widget):
+        """Bind click to widget and all children recursively"""
+        widget.bind("<Button-1>", self._on_click, add="+")
+        for child in widget.winfo_children():
+            self._bind_click_recursive(child)
 
     def _setup_dnd(self):
         """Setup drag and drop - fallback if tkinterdnd2 not available"""
+        if not DND_AVAILABLE or DND_FILES is None:
+            # Update text to indicate DnD is not available
+            self.after(100, lambda: self.sub_label.configure(
+                text="haz clic aqui para explorar archivos"
+            ))
+            return
+
         try:
             self.drop_target_register(DND_FILES)
             self.dnd_bind('<<Drop>>', self._on_drop)
             self.dnd_bind('<<DragEnter>>', self._on_drag_enter)
             self.dnd_bind('<<DragLeave>>', self._on_drag_leave)
         except Exception:
-            # tkinterdnd2 not available, click only
-            pass
+            self.after(100, lambda: self.sub_label.configure(
+                text="haz clic aqui para explorar archivos"
+            ))
+
+    def _get_initial_dir(self) -> str:
+        """Get the best initial directory for the file browser"""
+        candidates = [
+            Path.home() / "ai-models",
+            Path.home() / "Descargas",
+            Path.home() / "Downloads",
+            Path.home() / "Escritorio",
+            Path.home() / "Desktop",
+            Path.home(),
+        ]
+        for path in candidates:
+            if path.exists() and path.is_dir():
+                return str(path)
+        return str(Path.home())
 
     def _on_click(self, event=None):
         """Handle click to browse"""
@@ -113,17 +141,36 @@ class DropZone(ctk.CTkFrame):
                 ("Binary files", "*.bin"),
                 ("All files", "*.*")
             ],
-            initialdir=str(Path.home() / "ai-models")
+            initialdir=self._get_initial_dir()
         )
         if file_path:
             self._set_file(file_path)
 
     def _on_drop(self, event):
         """Handle file drop"""
-        file_path = event.data.strip('{}')
-        if file_path.lower().endswith(('.gguf', '.bin')):
-            self._set_file(file_path)
+        # Handle multiple file path formats from different DnD sources
+        data = event.data.strip()
+        # Remove curly braces (Tk wraps paths with spaces)
+        if data.startswith('{') and data.endswith('}'):
+            file_path = data[1:-1]
         else:
+            # Could be multiple files separated by space, take first
+            file_path = data.split()[0] if data else ""
+
+        # Remove file:// URI prefix if present
+        if file_path.startswith("file://"):
+            file_path = file_path[7:]
+
+        # URL-decode (e.g. %20 -> space)
+        try:
+            from urllib.parse import unquote
+            file_path = unquote(file_path)
+        except ImportError:
+            pass
+
+        if file_path and file_path.lower().endswith(('.gguf', '.bin')):
+            self._set_file(file_path)
+        elif file_path:
             messagebox.showwarning("Formato invalido", "Solo se aceptan archivos .gguf o .bin")
 
     def _on_drag_enter(self, event):
@@ -190,7 +237,8 @@ class DropZone(ctk.CTkFrame):
                     self.winfo_children()[0],  # content frame
                     text=perf_text,
                     font=ctk.CTkFont(family="Consolas", size=11),
-                    text_color=color
+                    text_color=color,
+                    wraplength=350
                 )
                 self.perf_label.pack(pady=(5, 0))
 
@@ -240,9 +288,10 @@ class ModelCard(ctk.CTkFrame):
             text=model_name,
             font=ctk.CTkFont(family="Consolas", size=14, weight="bold"),
             text_color=COLORS["matrix_green_bright"],
-            anchor="w"
+            anchor="w",
+            wraplength=400
         )
-        name_label.grid(row=0, column=1, sticky="w", padx=5, pady=(10, 0))
+        name_label.grid(row=0, column=1, sticky="ew", padx=5, pady=(10, 0))
 
         size_label = ctk.CTkLabel(
             self,
@@ -364,7 +413,8 @@ class ModelManagerPanel(ctk.CTkFrame):
             prompt_container,
             text="Escribe las instrucciones de comportamiento para tu modelo",
             font=ctk.CTkFont(family="Consolas", size=11),
-            text_color=COLORS["text_muted"]
+            text_color=COLORS["text_muted"],
+            wraplength=500
         )
         hint_label.pack(anchor="w", pady=(5, 0))
 
@@ -531,16 +581,53 @@ class ModelManagerPanel(ctk.CTkFrame):
 
         return section
 
+    @staticmethod
+    def _sanitize_model_name(file_path: str) -> str:
+        """Generate a valid Ollama model name from a GGUF filename.
+        Ollama names: lowercase alphanumeric, hyphens allowed, no dots/underscores/uppercase.
+        """
+        import re
+        stem = Path(file_path).stem.lower()
+
+        # Remove quantization suffixes (q3_k_m, q4_k_s, etc.) and part numbers
+        stem = re.sub(r'[-_]q\d+[-_]?k?[-_]?[a-z]?$', '', stem, flags=re.IGNORECASE)
+        stem = re.sub(r'[-_]?\d{5}-of-\d{5}$', '', stem)
+
+        # Replace non-alphanumeric chars with hyphens
+        stem = re.sub(r'[^a-z0-9]', '-', stem)
+        # Collapse multiple hyphens
+        stem = re.sub(r'-{2,}', '-', stem)
+        # Strip leading/trailing hyphens
+        stem = stem.strip('-')
+
+        # Truncate and ensure not empty
+        stem = stem[:30].rstrip('-')
+        return stem or "my-model"
+
     def _on_file_selected(self, file_path: str):
         """Handle file selection"""
         self.selected_gguf_path = file_path
 
-        # Auto-fill name
-        if not self.name_entry.get():
-            suggested = Path(file_path).stem.lower()
-            suggested = suggested.replace(" ", "-").replace("_", "-")[:30]
-            self.name_entry.delete(0, "end")
-            self.name_entry.insert(0, suggested)
+        # Always update name when a file is loaded
+        suggested = self._sanitize_model_name(file_path)
+        self.name_entry.delete(0, "end")
+        self.name_entry.insert(0, suggested)
+
+        # Auto-detect best system prompt based on model name
+        filename_lower = Path(file_path).stem.lower()
+        uncensored_keywords = ["dolphin", "uncensored", "abliterated", "nous-hermes"]
+        code_keywords = ["code", "codellama", "starcoder", "deepseek-coder", "codegemma"]
+
+        preset = None
+        if any(kw in filename_lower for kw in uncensored_keywords):
+            preset = "uncensored"
+        elif any(kw in filename_lower for kw in code_keywords):
+            preset = "coding"
+
+        if preset and not self.system_prompt.get("1.0", "end-1c").strip():
+            self.prompt_preset.set(preset)
+            self.system_prompt.delete("1.0", "end")
+            self.system_prompt.insert("1.0", SYSTEM_PROMPTS[preset])
 
     def _on_preset_selected(self, preset: str):
         """Handle preset selection"""
@@ -574,6 +661,7 @@ class ModelManagerPanel(ctk.CTkFrame):
         popup = ctk.CTkToplevel(self)
         popup.title("Modelfile Preview")
         popup.geometry("700x500")
+        popup.minsize(400, 300)
         popup.configure(fg_color=COLORS["bg_primary"])
 
         MatrixLabel(popup, text="CONTENIDO DEL MODELFILE:", size="md", bright=True).pack(
@@ -602,6 +690,17 @@ class ModelManagerPanel(ctk.CTkFrame):
         if not name:
             messagebox.showerror("Error", "Ingresa un nombre para el modelo (Paso 2)")
             return
+
+        # Sanitize name for Ollama compatibility
+        import re
+        name = re.sub(r'[^a-z0-9-]', '-', name.lower())
+        name = re.sub(r'-{2,}', '-', name).strip('-')
+        if not name:
+            messagebox.showerror("Error", "Nombre de modelo invalido")
+            return
+        # Update the entry to show the sanitized name
+        self.name_entry.delete(0, "end")
+        self.name_entry.insert(0, name)
 
         params = ModelParameters(
             temperature=self.temp_slider.get(),

@@ -523,14 +523,24 @@ class SystemPanel(ctk.CTkFrame):
    {DECORATIONS['prompt']} TIP: Instala drivers NVIDIA para acelerar
 """
 
-        ctk.CTkLabel(
+        summary_label = ctk.CTkLabel(
             content,
             text=summary_text,
             font=ctk.CTkFont(family="Consolas", size=13),
             text_color=COLORS["matrix_green"],
             justify="left",
-            anchor="w"
-        ).pack(fill="x")
+            anchor="w",
+            wraplength=600
+        )
+        summary_label.pack(fill="x")
+
+        def _update_summary_wrap(event=None):
+            try:
+                summary_label.configure(wraplength=max(200, content.winfo_width() - 60))
+            except Exception:
+                pass
+
+        content.bind("<Configure>", _update_summary_wrap, add="+")
 
         return card
 

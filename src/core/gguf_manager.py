@@ -41,15 +41,20 @@ class GGUFManager:
                 if expanded.exists():
                     self.search_paths.append(expanded)
 
-        # Default paths if none provided
-        if not self.search_paths:
-            default_paths = [
-                Path.home() / "ai-models",
-                Path.home() / ".ollama" / "models",
-                Path.home() / "models",
-                Path("/opt/models"),
-            ]
-            self.search_paths = [p for p in default_paths if p.exists()]
+        # Always include common download/model directories
+        extra_paths = [
+            Path.home() / "ai-models",
+            Path.home() / ".ollama" / "models",
+            Path.home() / "models",
+            Path.home() / "Descargas",
+            Path.home() / "Downloads",
+            Path.home() / "Escritorio",
+            Path.home() / "Desktop",
+            Path("/opt/models"),
+        ]
+        for p in extra_paths:
+            if p.exists() and p.is_dir() and p not in self.search_paths:
+                self.search_paths.append(p)
 
     def scan_directory(self, directory: Path, recursive: bool = True) -> List[GGUFFile]:
         """Scan a directory for GGUF files"""

@@ -226,13 +226,22 @@ Ejemplo de descarga:
         return section
 
     def _add_text(self, parent, text: str):
-        """Add text content to section"""
+        """Add text content to section with dynamic wraplength"""
         label = ctk.CTkLabel(
             parent,
             text=text,
             font=ctk.CTkFont(family="Consolas", size=13),
             text_color=COLORS["matrix_green"],
             justify="left",
-            anchor="w"
+            anchor="w",
+            wraplength=600
         )
         label.pack(fill="x", padx=20, pady=15)
+
+        def _update_wrap(event=None):
+            try:
+                label.configure(wraplength=max(200, parent.winfo_width() - 60))
+            except Exception:
+                pass
+
+        parent.bind("<Configure>", _update_wrap, add="+")
