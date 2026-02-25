@@ -294,15 +294,24 @@ class OllamaClient:
         on_token: Callable[[str], None],
         on_complete: Callable[[], None],
         on_error: Callable[[str], None],
-        options: Optional[dict] = None
+        options: Optional[dict] = None,
+        cancel_event: Optional[threading.Event] = None
     ) -> threading.Thread:
-        """Async chat that calls callbacks on token/complete/error"""
+        """Async chat that calls callbacks on token/complete/error.
+        If cancel_event is provided and set, streaming stops immediately.
+        """
         def run():
             try:
                 for token in self.chat(model, messages, stream=True, options=options):
+                    if cancel_event and cancel_event.is_set():
+                        return
                     on_token(token)
+                if cancel_event and cancel_event.is_set():
+                    return
                 on_complete()
             except Exception as e:
+                if cancel_event and cancel_event.is_set():
+                    return
                 on_error(str(e))
 
         thread = threading.Thread(target=run, daemon=True)

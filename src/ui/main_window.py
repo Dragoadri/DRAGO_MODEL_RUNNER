@@ -291,15 +291,88 @@ class MainWindow(ctk.CTk):
         self.minsize(1200, 800)
         self.configure(fg_color=COLORS["bg_dark"])
 
-        # Scale up UI elements
-        ctk.set_widget_scaling(1.2)
-        ctk.set_window_scaling(1.2)
+        # Scale UI based on system DPI (96 = standard, 144 = 150%, 192 = 200%)
+        dpi_scale = self._detect_system_scale()
+        ctk.set_widget_scaling(dpi_scale)
+        ctk.set_window_scaling(dpi_scale)
 
         # Setup UI
         self._setup_ui()
 
         # Initial checks
         self.after(100, self._startup_sequence)
+
+    def _detect_system_scale(self) -> float:
+        """Detect system DPI/scaling and return a customtkinter scale factor.
+
+        On GNOME fractional scaling (X11), the system renders at 2x DPI (192)
+        and then xrandr downscales the framebuffer.  We detect the real
+        physical resolution vs the virtual resolution to find the actual
+        user-facing scale factor.
+        """
+        import subprocess as sp, os, re
+
+        dpi = 96  # default
+
+        # 1. Try Xft.dpi from X resources
+        try:
+            result = sp.run(
+                ["xrdb", "-query"], capture_output=True, text=True, timeout=3
+            )
+            for line in result.stdout.splitlines():
+                if "Xft.dpi" in line:
+                    dpi = int(line.split(":")[-1].strip())
+                    break
+        except Exception:
+            pass
+
+        # 2. Fallback: GDK_SCALE env var
+        if dpi == 96:
+            gdk = os.environ.get("GDK_SCALE", "")
+            if gdk.isdigit() and int(gdk) > 1:
+                dpi = 96 * int(gdk)
+
+        system_factor = dpi / 96.0  # e.g. 2.0 for 192 dpi
+
+        # 3. On GNOME fractional scaling, detect xrandr downscale
+        #    (physical res vs virtual res gives the framebuffer transform)
+        xrandr_correction = 1.0
+        try:
+            result = sp.run(
+                ["xrandr", "--query"], capture_output=True, text=True, timeout=3
+            )
+            # Find connected primary: virtual resolution and native mode
+            virtual_w = None
+            native_w = None
+            lines = result.stdout.splitlines()
+            for i, line in enumerate(lines):
+                if "connected primary" in line:
+                    # e.g. "eDP-1-1 connected primary 3408x2130+0+0 ..."
+                    m = re.search(r'(\d+)x(\d+)\+', line)
+                    if m:
+                        virtual_w = int(m.group(1))
+                    # Next line has native resolution: "  2560x1600  240.00*+"
+                    for j in range(i + 1, min(i + 5, len(lines))):
+                        m2 = re.search(r'^\s+(\d+)x(\d+)\s+.*\*', lines[j])
+                        if m2:
+                            native_w = int(m2.group(1))
+                            break
+                    break
+
+            if virtual_w and native_w and virtual_w > native_w:
+                # Framebuffer is upscaled: transform = virtual / native
+                # Real user scale = dpi_factor / transform
+                transform = virtual_w / native_w
+                xrandr_correction = 1.0 / transform
+        except Exception:
+            pass
+
+        # Final scale: system DPI factor corrected by xrandr transform
+        # e.g. 150%: dpi=192 → factor=2.0, transform=1.33 → 2.0/1.33 = 1.5
+        scale = round(system_factor * xrandr_correction, 2)
+
+        # Clamp to reasonable range
+        return max(1.0, min(scale, 3.5))
 
     def _init_core(self):
         """Initialize core components"""
@@ -341,10 +414,15 @@ class MainWindow(ctk.CTk):
         self.content_frame.grid_columnconfigure(0, weight=1)
         self.content_frame.grid_rowconfigure(0, weight=1)
 
+        # Cancel event and generation tracking for STOP button
+        self._chat_cancel_event: Optional[threading.Event] = None
+        self._generation_id: int = 0
+
         # Create panels
         self.chat_panel = ChatPanel(
             self.content_frame,
-            on_send=self._on_chat_send
+            on_send=self._on_chat_send,
+            on_stop=self._on_chat_stop
         )
 
         self.models_panel = ModelManagerPanel(
@@ -484,9 +562,52 @@ class MainWindow(ctk.CTk):
             panels[panel_name].grid(row=0, column=0, sticky="nsew")
 
     def _on_model_selected(self, model_name: str):
-        """Handle model selection"""
+        """Handle model selection and load its system prompt"""
         if model_name not in ["No models", "Loading..."]:
             self.current_model = model_name
+            self._load_model_system_prompt(model_name)
+
+    def _load_model_system_prompt(self, model_name: str):
+        """Load system prompt from the model's Modelfile in background"""
+        import subprocess as sp
+
+        def fetch():
+            prompt = ""
+            try:
+                result = sp.run(
+                    ["ollama", "show", model_name, "--modelfile"],
+                    capture_output=True, text=True, timeout=10
+                )
+                if result.returncode == 0:
+                    in_system = False
+                    lines = []
+                    for line in result.stdout.splitlines():
+                        if line.strip().upper().startswith("SYSTEM"):
+                            in_system = True
+                            # Content after SYSTEM keyword on same line
+                            rest = line.strip()[6:].strip().strip('"').strip()
+                            if rest:
+                                lines.append(rest)
+                            continue
+                        if in_system:
+                            # SYSTEM block ends at next keyword or triple-quote
+                            if line.strip().startswith(('FROM ', 'PARAMETER ', 'TEMPLATE ', 'LICENSE ')):
+                                break
+                            if line.strip() == '"""':
+                                if lines:
+                                    break
+                                continue
+                            lines.append(line)
+                    prompt = "\n".join(lines).strip()
+            except Exception:
+                pass
+
+            def apply():
+                self.chat_panel.set_system_prompt(prompt)
+
+            self.after(0, apply)
+
+        threading.Thread(target=fetch, daemon=True).start()
 
     def _on_model_created(self, model_name: str):
         """Handle new model created"""
@@ -509,6 +630,11 @@ class MainWindow(ctk.CTk):
 
         self._startup_sequence()
 
+    def _on_chat_stop(self):
+        """Handle STOP button - cancel the running generation thread"""
+        if self._chat_cancel_event:
+            self._chat_cancel_event.set()
+
     def _on_chat_send(self, message: str):
         """Handle chat message"""
         model = self.sidebar.get_selected_model()
@@ -520,6 +646,16 @@ class MainWindow(ctk.CTk):
 
         self.current_model = model
 
+        # Cancel any previous generation
+        if self._chat_cancel_event:
+            self._chat_cancel_event.set()
+
+        # New cancel event and generation id for this request
+        self._chat_cancel_event = threading.Event()
+        self._generation_id += 1
+        gen_id = self._generation_id
+        cancel_event = self._chat_cancel_event
+
         # Start streaming response
         self.chat_panel.start_assistant_message()
 
@@ -530,13 +666,30 @@ class MainWindow(ctk.CTk):
             "top_p": 0.9
         }
 
+        def on_token(t):
+            # Discard tokens from stale generations
+            if gen_id != self._generation_id:
+                return
+            self.after(0, lambda: self.chat_panel.append_to_assistant(t))
+
+        def on_complete():
+            if gen_id != self._generation_id:
+                return
+            self.after(0, self.chat_panel.finish_assistant_message)
+
+        def on_error(e):
+            if gen_id != self._generation_id:
+                return
+            self.after(0, lambda: self._on_chat_error(e))
+
         self.ollama.chat_async(
             model=model,
             messages=messages,
-            on_token=lambda t: self.after(0, lambda: self.chat_panel.append_to_assistant(t)),
-            on_complete=lambda: self.after(0, self.chat_panel.finish_assistant_message),
-            on_error=lambda e: self.after(0, lambda: self._on_chat_error(e)),
-            options=options
+            on_token=on_token,
+            on_complete=on_complete,
+            on_error=on_error,
+            options=options,
+            cancel_event=cancel_event
         )
 
     def _on_chat_error(self, error: str):

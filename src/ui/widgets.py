@@ -52,12 +52,9 @@ class MatrixTextbox(ctk.CTkTextbox):
         kwargs.setdefault("border_width", 1)
         kwargs.setdefault("text_color", COLORS["matrix_green"])
         kwargs.setdefault("corner_radius", 4)
+        kwargs.setdefault("font", ctk.CTkFont(family="Consolas", size=13))
 
-        super().__init__(
-            parent,
-            font=ctk.CTkFont(family="Consolas", size=13),
-            **kwargs
-        )
+        super().__init__(parent, **kwargs)
 
 
 class MatrixLabel(ctk.CTkLabel):

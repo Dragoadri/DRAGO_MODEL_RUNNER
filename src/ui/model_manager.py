@@ -358,7 +358,12 @@ class ModelManagerPanel(ctk.CTkFrame):
         # ═══════════════════════════════════════════════════════════
         # STEP 1: CARGAR ARCHIVO GGUF
         # ═══════════════════════════════════════════════════════════
-        step1 = self._create_section(self.content, "PASO 1: CARGAR ARCHIVO GGUF")
+        step1 = self._create_section(
+            self.content, "PASO 1: CARGAR ARCHIVO GGUF",
+            description="Selecciona o arrastra un archivo .gguf desde tu disco. "
+                        "Estos archivos contienen modelos de IA cuantizados listos para usar.",
+            step_num=1
+        )
         step1.pack(fill="x", pady=(0, 15))
 
         # Drop zone
@@ -368,7 +373,12 @@ class ModelManagerPanel(ctk.CTkFrame):
         # ═══════════════════════════════════════════════════════════
         # STEP 2: CONFIGURAR MODELO (MODELFILE)
         # ═══════════════════════════════════════════════════════════
-        step2 = self._create_section(self.content, "PASO 2: CONFIGURAR MODELO (Modelfile)")
+        step2 = self._create_section(
+            self.content, "PASO 2: CONFIGURAR MODELO (Modelfile)",
+            description="Dale un nombre y configura el system prompt. "
+                        "El nombre se usa para identificar tu modelo en Ollama.",
+            step_num=2
+        )
         step2.pack(fill="x", pady=(0, 15))
 
         config_frame = ctk.CTkFrame(step2, fg_color="transparent")
@@ -421,7 +431,12 @@ class ModelManagerPanel(ctk.CTkFrame):
         # ═══════════════════════════════════════════════════════════
         # STEP 3: PARAMETROS DE INFERENCIA
         # ═══════════════════════════════════════════════════════════
-        step3 = self._create_section(self.content, "PASO 3: PARAMETROS DE INFERENCIA")
+        step3 = self._create_section(
+            self.content, "PASO 3: PARAMETROS DE INFERENCIA",
+            description="Ajusta los parametros de generacion. "
+                        "Los valores por defecto funcionan bien para la mayoria de casos.",
+            step_num=3
+        )
         step3.pack(fill="x", pady=(0, 15))
 
         params_frame = ctk.CTkFrame(step3, fg_color="transparent")
@@ -436,6 +451,9 @@ class ModelManagerPanel(ctk.CTkFrame):
         self.temp_label = MatrixLabel(params_frame, text="0.70", size="sm")
         self.temp_label.grid(row=0, column=2, padx=10, pady=8)
         self.temp_slider.configure(command=lambda v: self.temp_label.configure(text=f"{v:.2f}"))
+        ctk.CTkLabel(params_frame, text="Bajo = preciso, Alto = creativo",
+                     font=ctk.CTkFont(family="Consolas", size=10), text_color=COLORS["text_muted"]
+                     ).grid(row=0, column=3, padx=10, pady=8, sticky="w")
 
         # Top P
         MatrixLabel(params_frame, text="Top P:", size="sm").grid(row=1, column=0, padx=10, pady=8, sticky="w")
@@ -445,6 +463,9 @@ class ModelManagerPanel(ctk.CTkFrame):
         self.top_p_label = MatrixLabel(params_frame, text="0.90", size="sm")
         self.top_p_label.grid(row=1, column=2, padx=10, pady=8)
         self.top_p_slider.configure(command=lambda v: self.top_p_label.configure(text=f"{v:.2f}"))
+        ctk.CTkLabel(params_frame, text="Diversidad de tokens. 0.9 = buen balance",
+                     font=ctk.CTkFont(family="Consolas", size=10), text_color=COLORS["text_muted"]
+                     ).grid(row=1, column=3, padx=10, pady=8, sticky="w")
 
         # Repeat Penalty
         MatrixLabel(params_frame, text="Repeat Penalty:", size="sm").grid(row=2, column=0, padx=10, pady=8, sticky="w")
@@ -454,6 +475,9 @@ class ModelManagerPanel(ctk.CTkFrame):
         self.repeat_label = MatrixLabel(params_frame, text="1.10", size="sm")
         self.repeat_label.grid(row=2, column=2, padx=10, pady=8)
         self.repeat_slider.configure(command=lambda v: self.repeat_label.configure(text=f"{v:.2f}"))
+        ctk.CTkLabel(params_frame, text="Penaliza repeticiones. 1.1 = normal",
+                     font=ctk.CTkFont(family="Consolas", size=10), text_color=COLORS["text_muted"]
+                     ).grid(row=2, column=3, padx=10, pady=8, sticky="w")
 
         # Context Length
         MatrixLabel(params_frame, text="Context Length:", size="sm").grid(row=3, column=0, padx=10, pady=8, sticky="w")
@@ -464,11 +488,19 @@ class ModelManagerPanel(ctk.CTkFrame):
         )
         self.ctx_combo.set("4096")
         self.ctx_combo.grid(row=3, column=1, padx=10, pady=8, sticky="w")
+        ctk.CTkLabel(params_frame, text="Mas contexto = mas memoria. 4096 suficiente",
+                     font=ctk.CTkFont(family="Consolas", size=10), text_color=COLORS["text_muted"]
+                     ).grid(row=3, column=3, padx=10, pady=8, sticky="w")
 
         # ═══════════════════════════════════════════════════════════
         # STEP 4: CREAR MODELO
         # ═══════════════════════════════════════════════════════════
-        step4 = self._create_section(self.content, "PASO 4: CREAR MODELO EN OLLAMA")
+        step4 = self._create_section(
+            self.content, "PASO 4: CREAR MODELO EN OLLAMA",
+            description="Revisa la configuracion y crea tu modelo. "
+                        "El proceso puede tardar unos segundos dependiendo del archivo.",
+            step_num=4
+        )
         step4.pack(fill="x", pady=(0, 15))
 
         create_frame = ctk.CTkFrame(step4, fg_color="transparent")
@@ -490,7 +522,7 @@ class ModelManagerPanel(ctk.CTkFrame):
         )
         preview_btn.pack(side="left", padx=(0, 10))
 
-        # Create button
+        # Create button (disabled until a GGUF file is loaded)
         self.create_btn = ctk.CTkButton(
             create_frame,
             text=f"{DECORATIONS['block']} CREAR MODELO",
@@ -502,7 +534,8 @@ class ModelManagerPanel(ctk.CTkFrame):
             border_color=COLORS["matrix_green"],
             border_width=1,
             text_color=COLORS["bg_dark"],
-            command=self._create_model
+            command=self._create_model,
+            state="disabled"
         )
         self.create_btn.pack(side="left", padx=10)
 
@@ -559,8 +592,11 @@ class ModelManagerPanel(ctk.CTkFrame):
         # Initial load
         self.after(500, self._refresh_models_list)
 
-    def _create_section(self, parent, title: str) -> ctk.CTkFrame:
-        """Create a styled section"""
+    def _create_section(
+        self, parent, title: str,
+        description: str = "", step_num: int = 0
+    ) -> ctk.CTkFrame:
+        """Create a styled section with optional description and step indicator"""
         section = ctk.CTkFrame(
             parent,
             fg_color=COLORS["bg_secondary"],
@@ -571,15 +607,65 @@ class ModelManagerPanel(ctk.CTkFrame):
 
         header = ctk.CTkFrame(section, fg_color=COLORS["bg_tertiary"], corner_radius=0)
         header.pack(fill="x")
+        header.grid_columnconfigure(1, weight=1)
+
+        # Step indicator (circle that becomes checkmark when completed)
+        if step_num > 0:
+            indicator = ctk.CTkLabel(
+                header,
+                text="\u25cb",  # empty circle
+                font=ctk.CTkFont(family="Consolas", size=16),
+                text_color=COLORS["text_muted"],
+                width=30
+            )
+            indicator.grid(row=0, column=0, padx=(10, 0), pady=10)
+            # Store reference for later update
+            attr_name = f"_step{step_num}_indicator"
+            setattr(self, attr_name, indicator)
+
+        title_col = 1 if step_num > 0 else 0
+        title_colspan = 1
 
         MatrixLabel(
             header,
             text=f" {DECORATIONS['arrow_r']} {title}",
             size="md",
             bright=True
-        ).pack(anchor="w", padx=15, pady=10)
+        ).grid(row=0, column=title_col, sticky="w", padx=15 if step_num == 0 else 5, pady=10)
+
+        # Description text below header
+        if description:
+            desc_label = ctk.CTkLabel(
+                section,
+                text=f"  {description}",
+                font=ctk.CTkFont(family="Consolas", size=11),
+                text_color=COLORS["text_muted"],
+                anchor="w",
+                wraplength=700
+            )
+            desc_label.pack(fill="x", padx=15, pady=(5, 0))
 
         return section
+
+    def _mark_step_completed(self, step_num: int):
+        """Mark a step indicator as completed (green checkmark)"""
+        attr_name = f"_step{step_num}_indicator"
+        indicator = getattr(self, attr_name, None)
+        if indicator:
+            indicator.configure(
+                text=DECORATIONS["check"],
+                text_color=COLORS["success"]
+            )
+
+    def _reset_step_indicator(self, step_num: int):
+        """Reset a step indicator to empty circle"""
+        attr_name = f"_step{step_num}_indicator"
+        indicator = getattr(self, attr_name, None)
+        if indicator:
+            indicator.configure(
+                text="\u25cb",
+                text_color=COLORS["text_muted"]
+            )
 
     @staticmethod
     def _sanitize_model_name(file_path: str) -> str:
@@ -607,6 +693,10 @@ class ModelManagerPanel(ctk.CTkFrame):
     def _on_file_selected(self, file_path: str):
         """Handle file selection"""
         self.selected_gguf_path = file_path
+
+        # Mark step 1 as completed and enable create button
+        self._mark_step_completed(1)
+        self.create_btn.configure(state="normal")
 
         # Always update name when a file is loaded
         suggested = self._sanitize_model_name(file_path)
@@ -720,6 +810,10 @@ class ModelManagerPanel(ctk.CTkFrame):
         modelfile_path = Path(self.selected_gguf_path).parent / f"Modelfile_{name}"
         config.save_modelfile(modelfile_path)
 
+        # Mark steps 2 and 3 as completed (config + params accepted)
+        self._mark_step_completed(2)
+        self._mark_step_completed(3)
+
         # Start creation
         self.create_btn.configure(state="disabled")
         self.progress.pack(fill="x", pady=(5, 0))
@@ -743,6 +837,7 @@ class ModelManagerPanel(ctk.CTkFrame):
                 self.create_btn.configure(state="normal")
 
                 if success:
+                    self._mark_step_completed(4)
                     self.status_label.configure(
                         text=f"{DECORATIONS['check']} Modelo '{name}' creado!",
                         text_color=COLORS["success"]
@@ -772,6 +867,10 @@ class ModelManagerPanel(ctk.CTkFrame):
         self.repeat_slider.set(1.1)
         self.ctx_combo.set("4096")
         self.status_label.configure(text="")
+        # Reset step indicators and disable create button
+        for i in range(1, 5):
+            self._reset_step_indicator(i)
+        self.create_btn.configure(state="disabled")
 
     def _refresh_models_list(self):
         """Refresh installed models list"""
