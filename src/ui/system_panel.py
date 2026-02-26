@@ -7,7 +7,7 @@ import platform
 from pathlib import Path
 from typing import Dict, Optional
 
-from .theme import COLORS, DECORATIONS
+from .theme import COLORS, DECORATIONS, RADIUS
 from .widgets import (
     MatrixFrame, MatrixScrollableFrame, MatrixLabel,
     TerminalHeader, MatrixProgressBar
@@ -257,7 +257,7 @@ class SpecCard(ctk.CTkFrame):
             fg_color=COLORS["bg_card"],
             border_color=COLORS["border_green"],
             border_width=1,
-            corner_radius=6,
+            corner_radius=RADIUS["lg"],
             **kwargs
         )
 
@@ -460,7 +460,7 @@ class SystemPanel(ctk.CTkFrame):
             fg_color=COLORS["bg_secondary"],
             border_color=COLORS["matrix_green"],
             border_width=2,
-            corner_radius=6
+            corner_radius=RADIUS["lg"]
         )
 
         header = ctk.CTkFrame(card, fg_color=COLORS["bg_tertiary"], corner_radius=0)

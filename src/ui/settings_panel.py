@@ -5,7 +5,7 @@ from typing import Callable, Optional
 from pathlib import Path
 import json
 
-from .theme import COLORS, DECORATIONS
+from .theme import COLORS, DECORATIONS, RADIUS
 from .widgets import (
     MatrixFrame, MatrixButton, MatrixEntry, MatrixLabel,
     MatrixComboBox, TerminalHeader, MatrixScrollableFrame
@@ -79,7 +79,7 @@ class SettingsPanel(ctk.CTkFrame):
 
         # === OLLAMA SECTION ===
         ollama_section = self._create_section(content, "OLLAMA CONNECTION")
-        ollama_section.pack(fill="x", pady=(0, 15))
+        ollama_section.pack(fill="x", pady=(0, 20))
 
         ollama_grid = MatrixFrame(ollama_section)
         ollama_grid.pack(fill="x", padx=15, pady=15)
@@ -118,7 +118,7 @@ class SettingsPanel(ctk.CTkFrame):
 
         # === UI SECTION ===
         ui_section = self._create_section(content, "INTERFACE")
-        ui_section.pack(fill="x", pady=(0, 15))
+        ui_section.pack(fill="x", pady=(0, 20))
 
         ui_grid = MatrixFrame(ui_section)
         ui_grid.pack(fill="x", padx=15, pady=15)
@@ -151,7 +151,7 @@ class SettingsPanel(ctk.CTkFrame):
 
         # === PATHS SECTION ===
         paths_section = self._create_section(content, "PATHS")
-        paths_section.pack(fill="x", pady=(0, 15))
+        paths_section.pack(fill="x", pady=(0, 20))
 
         paths_grid = MatrixFrame(paths_section)
         paths_grid.pack(fill="x", padx=15, pady=15)
@@ -174,7 +174,7 @@ class SettingsPanel(ctk.CTkFrame):
 
         # === TRANSLATION SECTION ===
         trans_section = self._create_section(content, "TRANSLATION")
-        trans_section.pack(fill="x", pady=(0, 15))
+        trans_section.pack(fill="x", pady=(0, 20))
 
         trans_grid = MatrixFrame(trans_section)
         trans_grid.pack(fill="x", padx=15, pady=15)
@@ -244,7 +244,7 @@ class SettingsPanel(ctk.CTkFrame):
 
         # === ABOUT SECTION ===
         about_section = self._create_section(content, "ABOUT")
-        about_section.pack(fill="x", pady=(0, 15))
+        about_section.pack(fill="x", pady=(0, 20))
 
         about_text = f"""
 {DECORATIONS['block']} DRAGO MODEL RUNNER v1.0
@@ -257,6 +257,7 @@ Designed for running uncensored models locally.
 {DECORATIONS['arrow_r']} License: MIT
 
 {DECORATIONS['h_line'] * 35}
+v1.0.0 // Matrix Edition
         """
 
         about_label = ctk.CTkLabel(
@@ -301,7 +302,7 @@ Designed for running uncensored models locally.
             fg_color=COLORS["bg_secondary"],
             border_color=COLORS["border_green"],
             border_width=1,
-            corner_radius=6
+            corner_radius=RADIUS["lg"]
         )
 
         header = ctk.CTkFrame(section, fg_color=COLORS["bg_tertiary"], corner_radius=0)

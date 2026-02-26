@@ -14,7 +14,7 @@ except ImportError:
     DND_AVAILABLE = False
     DND_FILES = None
 
-from .theme import COLORS, DECORATIONS
+from .theme import COLORS, DECORATIONS, RADIUS
 from .widgets import (
     MatrixFrame, MatrixButton, MatrixEntry, MatrixTextbox,
     MatrixLabel, MatrixComboBox, MatrixSlider, MatrixProgressBar,
@@ -364,7 +364,7 @@ class ModelManagerPanel(ctk.CTkFrame):
                         "Estos archivos contienen modelos de IA cuantizados listos para usar.",
             step_num=1
         )
-        step1.pack(fill="x", pady=(0, 15))
+        step1.pack(fill="x", pady=(0, 20))
 
         # Drop zone
         self.drop_zone = DropZone(step1, on_file_dropped=self._on_file_selected, height=150)
@@ -379,7 +379,7 @@ class ModelManagerPanel(ctk.CTkFrame):
                         "El nombre se usa para identificar tu modelo en Ollama.",
             step_num=2
         )
-        step2.pack(fill="x", pady=(0, 15))
+        step2.pack(fill="x", pady=(0, 20))
 
         config_frame = ctk.CTkFrame(step2, fg_color="transparent")
         config_frame.pack(fill="x", padx=15, pady=10)
@@ -437,7 +437,7 @@ class ModelManagerPanel(ctk.CTkFrame):
                         "Los valores por defecto funcionan bien para la mayoria de casos.",
             step_num=3
         )
-        step3.pack(fill="x", pady=(0, 15))
+        step3.pack(fill="x", pady=(0, 20))
 
         params_frame = ctk.CTkFrame(step3, fg_color="transparent")
         params_frame.pack(fill="x", padx=15, pady=10)
@@ -501,7 +501,7 @@ class ModelManagerPanel(ctk.CTkFrame):
                         "El proceso puede tardar unos segundos dependiendo del archivo.",
             step_num=4
         )
-        step4.pack(fill="x", pady=(0, 15))
+        step4.pack(fill="x", pady=(0, 20))
 
         create_frame = ctk.CTkFrame(step4, fg_color="transparent")
         create_frame.pack(fill="x", padx=15, pady=15)
@@ -569,7 +569,7 @@ class ModelManagerPanel(ctk.CTkFrame):
         # MODELOS INSTALADOS
         # ═══════════════════════════════════════════════════════════
         models_section = self._create_section(self.content, "MODELOS INSTALADOS EN OLLAMA")
-        models_section.pack(fill="x", pady=(0, 15))
+        models_section.pack(fill="x", pady=(0, 20))
 
         self.models_list_frame = ctk.CTkFrame(models_section, fg_color="transparent")
         self.models_list_frame.pack(fill="x", padx=15, pady=10)
@@ -602,7 +602,7 @@ class ModelManagerPanel(ctk.CTkFrame):
             fg_color=COLORS["bg_secondary"],
             border_color=COLORS["border_green"],
             border_width=1,
-            corner_radius=6
+            corner_radius=RADIUS["lg"]
         )
 
         header = ctk.CTkFrame(section, fg_color=COLORS["bg_tertiary"], corner_radius=0)

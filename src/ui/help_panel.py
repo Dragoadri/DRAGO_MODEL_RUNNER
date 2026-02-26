@@ -1,6 +1,6 @@
 """Help/FAQ Panel with tutorials"""
 import customtkinter as ctk
-from .theme import COLORS, DECORATIONS
+from .theme import COLORS, DECORATIONS, RADIUS
 from .widgets import MatrixFrame, MatrixScrollableFrame, MatrixLabel, TerminalHeader
 
 
@@ -31,7 +31,7 @@ class HelpPanel(ctk.CTkFrame):
         # INTRO
         # ═══════════════════════════════════════════════════════════
         intro = self._create_section(content, "QUE ES DRAGO MODEL RUNNER?")
-        intro.pack(fill="x", pady=(0, 15))
+        intro.pack(fill="x", pady=(0, 20))
 
         intro_text = f"""
 {DECORATIONS['block']} DRAGO Model Runner es una interfaz grafica para ejecutar modelos de
@@ -54,7 +54,7 @@ class HelpPanel(ctk.CTkFrame):
         # PASO A PASO
         # ═══════════════════════════════════════════════════════════
         steps = self._create_section(content, "COMO USAR - PASO A PASO")
-        steps.pack(fill="x", pady=(0, 15))
+        steps.pack(fill="x", pady=(0, 20))
 
         steps_text = f"""
 {DECORATIONS['block']} PASO 1: DESCARGAR UN MODELO GGUF
@@ -118,7 +118,7 @@ Ejemplo de descarga:
         # FAQ
         # ═══════════════════════════════════════════════════════════
         faq = self._create_section(content, "PREGUNTAS FRECUENTES (FAQ)")
-        faq.pack(fill="x", pady=(0, 15))
+        faq.pack(fill="x", pady=(0, 20))
 
         faq_text = f"""
 {DECORATIONS['prompt']} El modelo va muy lento, que hago?
@@ -178,7 +178,7 @@ Ejemplo de descarga:
         # TIPS
         # ═══════════════════════════════════════════════════════════
         tips = self._create_section(content, "TIPS Y TRUCOS")
-        tips.pack(fill="x", pady=(0, 15))
+        tips.pack(fill="x", pady=(0, 20))
 
         tips_text = f"""
 {DECORATIONS['star']} System Prompts efectivos:
@@ -210,7 +210,7 @@ Ejemplo de descarga:
             fg_color=COLORS["bg_secondary"],
             border_color=COLORS["border_green"],
             border_width=1,
-            corner_radius=6
+            corner_radius=RADIUS["lg"]
         )
 
         header = ctk.CTkFrame(section, fg_color=COLORS["bg_tertiary"], corner_radius=0)
@@ -236,7 +236,7 @@ Ejemplo de descarga:
             anchor="w",
             wraplength=600
         )
-        label.pack(fill="x", padx=20, pady=15)
+        label.pack(fill="x", padx=20, pady=20)
 
         def _update_wrap(event=None):
             try:

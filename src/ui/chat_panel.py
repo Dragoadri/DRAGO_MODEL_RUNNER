@@ -12,7 +12,7 @@ try:
 except ImportError:
     PYPERCLIP_AVAILABLE = False
 
-from .theme import COLORS, DECORATIONS
+from .theme import COLORS, DECORATIONS, RADIUS
 from .widgets import (
     MatrixFrame, MatrixScrollableFrame, MatrixButton,
     MatrixTextbox, MatrixLabel, TerminalHeader
@@ -71,7 +71,7 @@ class ChatMessage(ctk.CTkFrame):
             fg_color=bg_color,
             border_color=border_color,
             border_width=1,
-            corner_radius=4,
+            corner_radius=RADIUS["lg"],
             **kwargs
         )
 
@@ -144,7 +144,7 @@ class ChatMessage(ctk.CTkFrame):
             self.translate_btn = None
 
         # Separator
-        sep = ctk.CTkFrame(self, fg_color=border_color, height=1)
+        sep = ctk.CTkFrame(self, fg_color=COLORS["border_dim"], height=1)
         sep.grid(row=1, column=0, sticky="ew", padx=12, pady=2)
 
         # Content - selectable textbox instead of label
@@ -159,7 +159,7 @@ class ChatMessage(ctk.CTkFrame):
             text_color=self._content_color,
             font=ctk.CTkFont(family="Consolas", size=14),
         )
-        self.content_textbox.grid(row=2, column=0, sticky="ew", padx=8, pady=(4, 12))
+        self.content_textbox.grid(row=2, column=0, sticky="ew", padx=12, pady=(4, 8))
 
         # Hide the internal scrollbar completely
         try:
@@ -178,22 +178,28 @@ class ChatMessage(ctk.CTkFrame):
         """Auto-resize the textbox to fit all content (no internal scroll)"""
         try:
             self.content_textbox.configure(state="normal")
-            # Use the underlying tk.Text widget to count display lines (includes wrapping)
             inner = self.content_textbox._textbox
-            display_lines = inner.count("1.0", "end", "displaylines")
-            if display_lines:
-                num_lines = display_lines[0] if isinstance(display_lines, tuple) else display_lines
+            # Measure actual pixel height needed via tk dlineinfo
+            inner.update_idletasks()
+            last_index = inner.index("end-1c")
+            bbox = inner.dlineinfo(last_index)
+            if bbox:
+                # bbox = (x, y, width, height, baseline) - y + height = total content height
+                new_height = bbox[1] + bbox[3] + 4
+                new_height = max(30, new_height)
             else:
-                # Fallback: count logical lines
-                num_lines = int(self.content_textbox.index("end-1c").split(".")[0])
-            line_height = 24
-            new_height = max(40, num_lines * line_height + 10)
+                # Fallback: count display lines
+                display_lines = inner.count("1.0", "end", "displaylines")
+                if display_lines:
+                    num_lines = display_lines[0] if isinstance(display_lines, tuple) else display_lines
+                else:
+                    num_lines = int(self.content_textbox.index("end-1c").split(".")[0])
+                new_height = max(30, num_lines * 20 + 4)
             self.content_textbox.configure(height=new_height, state="disabled")
         except Exception:
-            # Ultimate fallback: use logical line count
             try:
                 num_lines = int(self.content_textbox.index("end-1c").split(".")[0])
-                new_height = max(40, num_lines * 24 + 10)
+                new_height = max(30, num_lines * 20 + 4)
                 self.content_textbox.configure(height=new_height, state="disabled")
             except Exception:
                 pass
@@ -229,7 +235,16 @@ class ChatMessage(ctk.CTkFrame):
         self.content_textbox.delete("1.0", "end")
         self.content_textbox.insert("1.0", display + DECORATIONS["cursor"])
         self.content_textbox.configure(state="disabled")
-        self.after(10, self._auto_resize)
+        # Throttle resize: only every ~300ms during streaming
+        now = id(content)  # cheap unique marker
+        if not hasattr(self, '_resize_pending') or not self._resize_pending:
+            self._resize_pending = True
+            self.after(300, self._throttled_resize)
+
+    def _throttled_resize(self):
+        """Resize callback that resets the throttle flag."""
+        self._resize_pending = False
+        self._auto_resize()
 
     def finish_content(self, content: str):
         """Finalize content (remove cursor)"""
@@ -291,15 +306,34 @@ class ChatMessage(ctk.CTkFrame):
             border_width=1,
             corner_radius=4
         )
-        self._translation_frame.grid(row=3, column=0, sticky="ew", padx=8, pady=(0, 12))
+        self._translation_frame.grid(row=3, column=0, sticky="ew", padx=8, pady=(0, 6))
 
-        # Header
+        # Header with copy button
+        trans_header = ctk.CTkFrame(self._translation_frame, fg_color="transparent")
+        trans_header.pack(fill="x", padx=10, pady=(8, 4))
+        trans_header.columnconfigure(1, weight=1)
+
         ctk.CTkLabel(
-            self._translation_frame,
+            trans_header,
             text=f" {DECORATIONS['h_line']*3} TRANSLATION {DECORATIONS['h_line']*3}",
             font=ctk.CTkFont(family="Consolas", size=10),
             text_color=COLORS["accent_cyan"]
-        ).pack(anchor="w", padx=10, pady=(8, 4))
+        ).grid(row=0, column=0, sticky="w")
+
+        self._trans_copy_btn = ctk.CTkButton(
+            trans_header,
+            text="COPY",
+            font=ctk.CTkFont(family="Consolas", size=10),
+            width=50,
+            height=20,
+            fg_color=COLORS["bg_tertiary"],
+            hover_color=COLORS["bg_hover"],
+            border_color=COLORS["accent_cyan"],
+            border_width=1,
+            text_color=COLORS["accent_cyan"],
+            command=lambda: self._copy_translation(text)
+        )
+        self._trans_copy_btn.grid(row=0, column=2, sticky="e")
 
         # Translated text - use MatrixTextbox for consistency
         trans_textbox = MatrixTextbox(
@@ -327,16 +361,44 @@ class ChatMessage(ctk.CTkFrame):
             try:
                 trans_textbox.configure(state="normal")
                 inner = trans_textbox._textbox
-                dl = inner.count("1.0", "end", "displaylines")
-                if dl:
-                    n = dl[0] if isinstance(dl, tuple) else dl
+                inner.update_idletasks()
+                last_index = inner.index("end-1c")
+                bbox = inner.dlineinfo(last_index)
+                if bbox:
+                    new_h = bbox[1] + bbox[3] + 4
+                    trans_textbox.configure(height=max(26, new_h), state="disabled")
                 else:
-                    n = int(trans_textbox.index("end-1c").split(".")[0])
-                trans_textbox.configure(height=max(30, n * 22 + 10), state="disabled")
+                    dl = inner.count("1.0", "end", "displaylines")
+                    if dl:
+                        n = dl[0] if isinstance(dl, tuple) else dl
+                    else:
+                        n = int(trans_textbox.index("end-1c").split(".")[0])
+                    trans_textbox.configure(height=max(26, n * 20 + 4), state="disabled")
             except Exception:
                 pass
 
         self.after(50, resize)
+
+    def _copy_translation(self, text: str):
+        """Copy translated text to clipboard"""
+        try:
+            root = self.winfo_toplevel()
+            root.clipboard_clear()
+            root.clipboard_append(text)
+            root.update()
+            self._trans_copy_btn.configure(text="OK!")
+            self.after(1500, lambda: self._trans_copy_btn.configure(text="COPY"))
+        except Exception:
+            try:
+                if PYPERCLIP_AVAILABLE:
+                    pyperclip.copy(text)
+                    self._trans_copy_btn.configure(text="OK!")
+                    self.after(1500, lambda: self._trans_copy_btn.configure(text="COPY"))
+                    return
+            except Exception:
+                pass
+            self._trans_copy_btn.configure(text="ERR")
+            self.after(1500, lambda: self._trans_copy_btn.configure(text="COPY"))
 
 
 class ChatPanel(ctk.CTkFrame):
@@ -442,6 +504,14 @@ class ChatPanel(ctk.CTkFrame):
         self.input_text.bind("<Return>", self._on_enter)
         self.input_text.bind("<Shift-Return>", lambda e: None)
 
+        # Focus glow effect
+        self.input_text.bind("<FocusIn>", lambda e: self.input_text.configure(
+            border_color=COLORS["matrix_green"]
+        ))
+        self.input_text.bind("<FocusOut>", lambda e: self.input_text.configure(
+            border_color=COLORS["matrix_green_dim"]
+        ))
+
         # Buttons container
         btn_frame = ctk.CTkFrame(self.input_frame, fg_color="transparent")
         btn_frame.grid(row=0, column=2, padx=15, pady=10)
@@ -526,9 +596,13 @@ class ChatPanel(ctk.CTkFrame):
         )
         self.translate_status.pack(side="left", padx=(8, 0))
 
+        # Status bar separator
+        status_sep = ctk.CTkFrame(self, fg_color=COLORS["border_green"], height=1)
+        status_sep.grid(row=3, column=0, sticky="ew")
+
         # Status bar
         self.status_bar = ctk.CTkFrame(self, fg_color=COLORS["bg_dark"], height=28)
-        self.status_bar.grid(row=3, column=0, sticky="ew")
+        self.status_bar.grid(row=4, column=0, sticky="ew")
 
         self.status_label = ctk.CTkLabel(
             self.status_bar,
@@ -558,20 +632,21 @@ class ChatPanel(ctk.CTkFrame):
         welcome_frame.pack(fill="x", pady=20, padx=20)
 
         welcome_text = f"""
-{DECORATIONS['block']} DRAGO MODEL RUNNER v1.0
-{DECORATIONS['h_line'] * 40}
+  {DECORATIONS['block_dark']*3} {DECORATIONS['block']*3} {DECORATIONS['block_dark']*3}
 
-Sistema de inferencia local inicializado.
-Selecciona un modelo en el panel lateral para comenzar.
+  DRAGO MODEL RUNNER v1.0
+  {DECORATIONS['h_line'] * 32}
 
-Comandos:
-  {DECORATIONS['prompt']} Escribe tu mensaje y presiona ENTER
-  {DECORATIONS['prompt']} SHIFT+ENTER para nueva linea
-  {DECORATIONS['prompt']} Boton CLEAR para reiniciar sesion
-  {DECORATIONS['prompt']} Boton COPY para copiar mensajes
+  Sistema de inferencia local.
 
-{DECORATIONS['h_line'] * 40}
-        """
+  {DECORATIONS['prompt']} ENTER        Enviar mensaje
+  {DECORATIONS['prompt']} SHIFT+ENTER  Nueva linea
+  {DECORATIONS['prompt']} CLEAR        Reiniciar sesion
+  {DECORATIONS['prompt']} COPY         Copiar mensajes
+
+  {DECORATIONS['h_line'] * 32}
+  Selecciona un modelo para comenzar.
+"""
 
         welcome_label = ctk.CTkLabel(
             welcome_frame,
@@ -713,7 +788,7 @@ Comandos:
         if self.current_assistant_widget:
             self.current_assistant_widget.update_content(self.current_response)
 
-        if len(self.current_response) % 50 == 0:
+        if len(self.current_response) % 100 == 0:
             self._scroll_to_bottom()
 
     def finish_assistant_message(self):
