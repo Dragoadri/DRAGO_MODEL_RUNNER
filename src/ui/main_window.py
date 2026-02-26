@@ -17,7 +17,7 @@ from .model_manager import ModelManagerPanel
 from .settings_panel import SettingsPanel
 from .help_panel import HelpPanel
 from .system_panel import SystemPanel
-from ..core import OllamaClient, GGUFManager, TranslationService
+from ..core import OllamaClient, GGUFManager, TranslationService, ChatStorage
 
 
 class MatrixRain(ctk.CTkCanvas):
@@ -542,6 +542,10 @@ class MainWindow(ctk.CTk):
         self.auto_translate_input = translation_config.get("auto_translate_input", True)
         self.translator = TranslationService.get_instance()
 
+        # Chat storage
+        self.chat_storage = ChatStorage()
+        self.active_chat_id: Optional[str] = None
+
     def _setup_ui(self):
         """Setup main UI"""
         self.grid_columnconfigure(1, weight=1)
@@ -572,6 +576,7 @@ class MainWindow(ctk.CTk):
             on_send=self._on_chat_send,
             on_stop=self._on_chat_stop
         )
+        self.chat_panel.set_chat_callback(self._on_chat_data_updated)
 
         self.models_panel = ModelManagerPanel(
             self.content_frame,
@@ -633,6 +638,10 @@ class MainWindow(ctk.CTk):
                     self._prompt_start_ollama()
 
                 self.sidebar.set_gpu_info(gpu_info)
+
+                # Load last chat or create new
+                self._load_last_or_new_chat()
+                self._refresh_chat_list()
 
             self.after(0, update)
 
@@ -707,6 +716,16 @@ class MainWindow(ctk.CTk):
         """Handle navigation"""
         if panel_name == "refresh_models":
             self._refresh_models()
+        elif panel_name == "new_chat":
+            self._create_new_chat()
+            self._show_panel("chat")
+            self.sidebar._on_nav_click("chat")
+        elif panel_name == "search_chats":
+            self._refresh_chat_list()
+        elif panel_name.startswith("load_chat:"):
+            self._load_chat(panel_name.split(":", 1)[1])
+        elif panel_name.startswith("delete_chat:"):
+            self._delete_chat(panel_name.split(":", 1)[1])
         else:
             self._show_panel(panel_name)
 
@@ -877,6 +896,68 @@ class MainWindow(ctk.CTk):
             options=options,
             cancel_event=cancel_event
         )
+
+    def _load_last_or_new_chat(self):
+        """Load the most recent chat or create a new one."""
+        chats = self.chat_storage.list_chats()
+        if chats:
+            chat_data = self.chat_storage.load_chat(chats[0]["id"])
+            if chat_data:
+                self.active_chat_id = chat_data["id"]
+                self.chat_panel.load_chat(chat_data)
+                return
+        # No chats exist, create new
+        self._create_new_chat()
+
+    def _create_new_chat(self):
+        """Create a new empty chat session."""
+        model = self.sidebar.get_selected_model()
+        if model in ["No models", "Loading..."]:
+            model = ""
+        chat = self.chat_storage.new_chat(model=model)
+        self.active_chat_id = chat["id"]
+        self.chat_panel.clear_chat()
+        self.chat_panel.set_current_chat(chat)
+        self._refresh_chat_list()
+
+    def _on_chat_data_updated(self, chat_data):
+        """Called by ChatPanel when messages change (auto-save)."""
+        if chat_data is None:
+            # Chat was cleared — create new
+            self._create_new_chat()
+            return
+        chat_data["model"] = self.current_model or ""
+        self.chat_storage.save_chat(chat_data)
+        self._refresh_chat_list()
+
+    def _refresh_chat_list(self):
+        """Refresh the chat list in the sidebar."""
+        query = self.sidebar.get_search_query()
+        if query:
+            chats = self.chat_storage.search_chats(query)
+        else:
+            chats = self.chat_storage.list_chats()
+        self.sidebar.update_chat_list(chats, self.active_chat_id)
+
+    def _load_chat(self, chat_id: str):
+        """Load a specific chat."""
+        chat_data = self.chat_storage.load_chat(chat_id)
+        if chat_data:
+            self.active_chat_id = chat_id
+            self.chat_panel.load_chat(chat_data)
+            self._refresh_chat_list()
+            # Switch to chat panel if not already there
+            self._show_panel("chat")
+            self.sidebar._on_nav_click("chat")
+
+    def _delete_chat(self, chat_id: str):
+        """Delete a chat with confirmation."""
+        if not messagebox.askyesno("Delete Chat", "Are you sure you want to delete this chat?"):
+            return
+        self.chat_storage.delete_chat(chat_id)
+        if chat_id == self.active_chat_id:
+            self._load_last_or_new_chat()
+        self._refresh_chat_list()
 
     def _on_chat_error(self, error: str):
         """Handle chat error"""
