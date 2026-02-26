@@ -39,6 +39,11 @@ COLORS = {
     "border_bright": "#00ff41",
     "border_dim": "#1a3a1a",
 
+    # Focus/Active states
+    "bg_focus": "#0a1f0a",
+    "border_focus": "#00ff41",
+    "bg_active_nav": "#0d2b0d",
+
     # Status
     "success": "#00ff41",
     "warning": "#ffcc00",
@@ -75,6 +80,21 @@ SPACING = {
     "lg": 16,
     "xl": 24,
     "xxl": 32,
+}
+
+RADIUS = {
+    "sm": 4,
+    "md": 6,
+    "lg": 8,
+    "xl": 12,
+}
+
+NAV_ICONS = {
+    "chat": "\u2328",      # keyboard - neural chat
+    "models": "\u2699",     # gear - model forge
+    "system": "\u2630",     # trigram - system
+    "help": "\u2753",       # question mark - help
+    "settings": "\u2318",   # place of interest - config
 }
 
 # ============================================
