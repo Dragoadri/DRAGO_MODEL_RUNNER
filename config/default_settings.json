@@ -20,5 +20,11 @@
     "paths": {
         "models_dir": "~/ai-models",
         "gguf_extensions": [".gguf", ".bin"]
+    },
+    "translation": {
+        "enabled": true,
+        "source_lang": "es",
+        "target_lang": "en",
+        "auto_translate_input": true
     }
 }
