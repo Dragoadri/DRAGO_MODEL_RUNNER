@@ -360,8 +360,11 @@ class ModelManagerPanel(ctk.CTkFrame):
         # ═══════════════════════════════════════════════════════════
         step1 = self._create_section(
             self.content, "PASO 1: CARGAR ARCHIVO GGUF",
-            description="Selecciona o arrastra un archivo .gguf desde tu disco. "
-                        "Estos archivos contienen modelos de IA cuantizados listos para usar.",
+            description="Selecciona o arrastra un archivo .gguf desde tu disco (o USB). "
+                        "Los archivos GGUF son modelos de IA comprimidos (cuantizados) que "
+                        "puedes descargar de HuggingFace. Cuanto menor sea la cuantizacion "
+                        "(Q3, Q4...) mas ligero pero menos preciso. Q4_K_M es el mejor "
+                        "balance para la mayoria de GPUs.",
             step_num=1
         )
         step1.pack(fill="x", pady=(0, 20))
@@ -375,8 +378,9 @@ class ModelManagerPanel(ctk.CTkFrame):
         # ═══════════════════════════════════════════════════════════
         step2 = self._create_section(
             self.content, "PASO 2: CONFIGURAR MODELO (Modelfile)",
-            description="Dale un nombre y configura el system prompt. "
-                        "El nombre se usa para identificar tu modelo en Ollama.",
+            description="Dale un nombre corto a tu modelo (ej: 'dolphin-7b') y configura "
+                        "su personalidad con el System Prompt. El Modelfile es la receta que "
+                        "Ollama usa para saber como ejecutar tu modelo.",
             step_num=2
         )
         step2.pack(fill="x", pady=(0, 20))
@@ -387,14 +391,21 @@ class ModelManagerPanel(ctk.CTkFrame):
 
         # Model Name
         MatrixLabel(config_frame, text="Nombre del modelo:", size="sm").grid(
-            row=0, column=0, padx=10, pady=10, sticky="w"
+            row=0, column=0, padx=10, pady=(10, 0), sticky="w"
         )
         self.name_entry = MatrixEntry(config_frame, placeholder_text="mi-modelo-custom", width=300)
-        self.name_entry.grid(row=0, column=1, padx=10, pady=10, sticky="w")
+        self.name_entry.grid(row=0, column=1, padx=10, pady=(10, 0), sticky="w")
+
+        ctk.CTkLabel(
+            config_frame,
+            text="Solo letras minusculas, numeros y guiones. Ej: dolphin-7b, llama3-code",
+            font=ctk.CTkFont(family="Consolas", size=10),
+            text_color=COLORS["text_muted"],
+        ).grid(row=1, column=1, padx=10, pady=(2, 8), sticky="w")
 
         # System Prompt Template
         MatrixLabel(config_frame, text="Plantilla de prompt:", size="sm").grid(
-            row=1, column=0, padx=10, pady=10, sticky="w"
+            row=2, column=0, padx=10, pady=10, sticky="w"
         )
 
         template_frame = ctk.CTkFrame(config_frame, fg_color="transparent")
