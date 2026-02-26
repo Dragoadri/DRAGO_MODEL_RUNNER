@@ -11,3 +11,6 @@ httpx>=0.25.0
 pydantic>=2.0.0
 python-dotenv>=1.0.0
 pyperclip>=1.8.0
+
+# Translation (local, offline)
+argostranslate>=1.9.0
