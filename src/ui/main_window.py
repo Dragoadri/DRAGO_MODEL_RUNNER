@@ -5,6 +5,7 @@ from typing import Optional
 from pathlib import Path
 import threading
 import random
+from PIL import Image, ImageTk
 
 from .theme import COLORS, DECORATIONS, ASCII_LOGO
 from .widgets import (
@@ -278,6 +279,16 @@ class MainWindow(ctk.CTk):
 
     def __init__(self, config_path: Path):
         super().__init__()
+
+        # Set WM_CLASS to match .desktop StartupWMClass for dock icon
+        self.tk.call('tk', 'appname', 'drago-model-runner')
+
+        # Set window icon
+        icon_path = Path(__file__).parent.parent.parent / "icon.png"
+        if icon_path.exists():
+            icon_image = Image.open(icon_path)
+            self._icon_photo = ImageTk.PhotoImage(icon_image)
+            self.iconphoto(True, self._icon_photo)
 
         self.config_path = config_path
         self.current_model: Optional[str] = None
