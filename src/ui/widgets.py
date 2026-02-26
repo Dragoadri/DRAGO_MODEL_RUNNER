@@ -4,7 +4,7 @@ from typing import Optional, Callable, List
 import time
 import threading
 
-from .theme import COLORS, FONTS, DECORATIONS, BUTTON_STYLE, BUTTON_PRIMARY_STYLE, ENTRY_STYLE
+from .theme import COLORS, FONTS, DECORATIONS, BUTTON_STYLE, BUTTON_PRIMARY_STYLE, ENTRY_STYLE, RADIUS
 
 
 class MatrixButton(ctk.CTkButton):
@@ -25,6 +25,49 @@ class MatrixButton(ctk.CTkButton):
             **style,
             **kwargs
         )
+
+
+class MatrixIconButton(ctk.CTkButton):
+    """Compact icon button for navigation tabs"""
+
+    def __init__(self, parent, icon: str = "", label: str = "", active: bool = False, **kwargs):
+        fg = COLORS["bg_active_nav"] if active else COLORS["bg_secondary"]
+        border = COLORS["matrix_green"] if active else COLORS["border_green"]
+        text_c = COLORS["matrix_green_bright"] if active else COLORS["matrix_green_dim"]
+
+        kwargs.setdefault("width", 50)
+        kwargs.setdefault("height", 44)
+        kwargs.setdefault("corner_radius", RADIUS["md"])
+        kwargs.setdefault("border_width", 1)
+
+        display = f"{icon}\n{label}" if label else icon
+
+        super().__init__(
+            parent,
+            text=display,
+            font=ctk.CTkFont(family="Consolas", size=10),
+            fg_color=fg,
+            hover_color=COLORS["bg_hover"],
+            border_color=border,
+            text_color=text_c,
+            **kwargs
+        )
+        self._is_active = active
+
+    def set_active(self, active: bool):
+        self._is_active = active
+        if active:
+            self.configure(
+                fg_color=COLORS["bg_active_nav"],
+                border_color=COLORS["matrix_green"],
+                text_color=COLORS["matrix_green_bright"]
+            )
+        else:
+            self.configure(
+                fg_color=COLORS["bg_secondary"],
+                border_color=COLORS["border_green"],
+                text_color=COLORS["matrix_green_dim"]
+            )
 
 
 class MatrixEntry(ctk.CTkEntry):
@@ -236,6 +279,10 @@ class TerminalHeader(ctk.CTkFrame):
                 size="sm",
                 text_color=COLORS["text_muted"]
             ).pack(side="left", padx=(10, 0))
+
+        # Accent line at bottom
+        accent = ctk.CTkFrame(self, fg_color=COLORS["matrix_green_dark"], height=1)
+        accent.grid(row=1, column=0, columnspan=3, sticky="ew")
 
 
 class StatusIndicator(ctk.CTkFrame):
