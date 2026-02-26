@@ -106,42 +106,44 @@ class Sidebar(ctk.CTkFrame):
         self.grid_rowconfigure(4, weight=1)
         self.grid_columnconfigure(0, weight=1)
 
-        # ── Compact Logo + Status ──
+        # ── ASCII Logo + Status ──
         logo_frame = ctk.CTkFrame(self, fg_color=COLORS["bg_dark"], corner_radius=0)
         logo_frame.grid(row=0, column=0, sticky="ew")
-        logo_frame.grid_columnconfigure(0, weight=1)
 
-        logo_row = ctk.CTkFrame(logo_frame, fg_color="transparent")
-        logo_row.pack(fill="x", padx=12, pady=10)
-        logo_row.grid_columnconfigure(1, weight=1)
+        logo_text = """╔══════════════════════╗
+║  ██████╗ ██████╗     ║
+║  ██╔══██╗██╔══██╗    ║
+║  ██║  ██║██████╔╝    ║
+║  ██║  ██║██╔══██╗    ║
+║  ██████╔╝██║  ██║    ║
+║  ╚═════╝ ╚═╝  ╚═╝    ║
+║    DRAGO RUNNER      ║
+╚══════════════════════╝"""
 
-        logo_text = f"{DECORATIONS['block_dark']}{DECORATIONS['block']}{DECORATIONS['block_dark']}"
         ctk.CTkLabel(
-            logo_row,
+            logo_frame,
             text=logo_text,
-            font=ctk.CTkFont(family="Consolas", size=16),
+            font=ctk.CTkFont(family="Consolas", size=9),
             text_color=COLORS["matrix_green"],
-        ).grid(row=0, column=0, padx=(0, 8))
+            justify="center",
+        ).pack(pady=(10, 4))
 
-        ctk.CTkLabel(
-            logo_row,
-            text="DRAGO RUNNER",
-            font=ctk.CTkFont(family="Consolas", size=14, weight="bold"),
-            text_color=COLORS["matrix_green_bright"],
-            anchor="w",
-        ).grid(row=0, column=1, sticky="w")
+        # Status + GPU row below logo
+        status_row = ctk.CTkFrame(logo_frame, fg_color="transparent")
+        status_row.pack(fill="x", padx=12, pady=(0, 8))
+        status_row.grid_columnconfigure(1, weight=1)
 
-        self.status_indicator = StatusIndicator(logo_row)
-        self.status_indicator.grid(row=0, column=2, padx=(4, 0))
+        self.status_indicator = StatusIndicator(status_row)
+        self.status_indicator.grid(row=0, column=0, padx=(0, 8))
 
         self.gpu_label = ctk.CTkLabel(
-            logo_frame,
-            text=f"  {DECORATIONS['arrow_r']} GPU: Detecting...",
+            status_row,
+            text=f"GPU: Detecting...",
             font=ctk.CTkFont(family="Consolas", size=10),
             text_color=COLORS["text_muted"],
             anchor="w",
         )
-        self.gpu_label.pack(fill="x", padx=12, pady=(0, 6))
+        self.gpu_label.grid(row=0, column=1, sticky="w")
 
         # ── Model Selector ──
         model_frame = ctk.CTkFrame(self, fg_color="transparent")
