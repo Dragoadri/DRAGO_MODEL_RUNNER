@@ -114,6 +114,34 @@ class ChatMessage(ctk.CTkFrame):
         )
         self.copy_btn.grid(row=0, column=2, sticky="e")
 
+        # Translate button (assistant messages only)
+        self._translation_frame = None
+        self._showing_translation = False
+        self._translated_text = None
+        self._translator = None
+        self._translate_source = "es"
+        self._translate_target = "en"
+
+        if not is_user:
+            self.translate_btn = ctk.CTkButton(
+                header,
+                text="TRADUCIR",
+                font=ctk.CTkFont(family="Consolas", size=10),
+                width=70,
+                height=22,
+                fg_color=COLORS["bg_tertiary"],
+                hover_color=COLORS["bg_hover"],
+                border_color=COLORS["accent_cyan"],
+                border_width=1,
+                text_color=COLORS["accent_cyan"],
+                command=self._toggle_translation
+            )
+            self.translate_btn.grid(row=0, column=2, sticky="e", padx=(0, 5))
+            # Move copy button to column 3
+            self.copy_btn.grid(row=0, column=3, sticky="e")
+        else:
+            self.translate_btn = None
+
         # Separator
         sep = ctk.CTkFrame(self, fg_color=border_color, height=1)
         sep.grid(row=1, column=0, sticky="ew", padx=12, pady=2)
@@ -212,6 +240,103 @@ class ChatMessage(ctk.CTkFrame):
         self.content_textbox.configure(state="disabled")
         self.after(10, self._auto_resize)
 
+    def _toggle_translation(self):
+        """Toggle translation display"""
+        if self._showing_translation:
+            # Show original
+            if self._translation_frame:
+                self._translation_frame.destroy()
+                self._translation_frame = None
+            self.translate_btn.configure(text="TRADUCIR")
+            self._showing_translation = False
+        else:
+            # Translate and show
+            self.translate_btn.configure(text="...", state="disabled")
+            self._do_translate()
+
+    def _do_translate(self):
+        """Perform translation in background thread"""
+        import threading
+
+        if not self._translator or not self._translator.is_ready():
+            self.translate_btn.configure(text="N/A", state="normal")
+            self.after(1500, lambda: self.translate_btn.configure(text="TRADUCIR"))
+            return
+
+        def work():
+            # Translate from model language to user language
+            translated = self._translator.translate(
+                self.raw_content, self._translate_target, self._translate_source
+            )
+
+            def show():
+                if not self.winfo_exists():
+                    return
+                self._translated_text = translated
+                self._show_translation(translated)
+                self.translate_btn.configure(text="ORIGINAL", state="normal")
+                self._showing_translation = True
+
+            self.after(0, show)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _show_translation(self, text: str):
+        """Display translated text below original"""
+        self._translation_frame = ctk.CTkFrame(
+            self,
+            fg_color=COLORS["bg_tertiary"],
+            border_color=COLORS["accent_cyan"],
+            border_width=1,
+            corner_radius=4
+        )
+        self._translation_frame.grid(row=3, column=0, sticky="ew", padx=8, pady=(0, 12))
+
+        # Header
+        ctk.CTkLabel(
+            self._translation_frame,
+            text=f" {DECORATIONS['h_line']*3} TRANSLATION {DECORATIONS['h_line']*3}",
+            font=ctk.CTkFont(family="Consolas", size=10),
+            text_color=COLORS["accent_cyan"]
+        ).pack(anchor="w", padx=10, pady=(8, 4))
+
+        # Translated text - use MatrixTextbox for consistency
+        trans_textbox = MatrixTextbox(
+            self._translation_frame,
+            height=10,
+            wrap="word",
+            fg_color=COLORS["bg_tertiary"],
+            border_width=0,
+            text_color=COLORS["accent_cyan"],
+            font=ctk.CTkFont(family="Consolas", size=13),
+        )
+        trans_textbox.pack(fill="x", padx=8, pady=(0, 8))
+
+        try:
+            trans_textbox._scrollbar.grid_forget()
+        except Exception:
+            pass
+
+        display = parse_markdown_simple(text)
+        trans_textbox.insert("1.0", display)
+        trans_textbox.configure(state="disabled")
+
+        # Auto-resize
+        def resize():
+            try:
+                trans_textbox.configure(state="normal")
+                inner = trans_textbox._textbox
+                dl = inner.count("1.0", "end", "displaylines")
+                if dl:
+                    n = dl[0] if isinstance(dl, tuple) else dl
+                else:
+                    n = int(trans_textbox.index("end-1c").split(".")[0])
+                trans_textbox.configure(height=max(30, n * 22 + 10), state="disabled")
+            except Exception:
+                pass
+
+        self.after(50, resize)
+
 
 class ChatPanel(ctk.CTkFrame):
     """Matrix-styled chat interface"""
@@ -236,6 +361,10 @@ class ChatPanel(ctk.CTkFrame):
         self.current_assistant_widget: Optional[ChatMessage] = None
         self.current_response = ""
         self._system_prompt: Optional[str] = None
+        self._translator = None
+        self._translate_source = "es"
+        self._translate_target = "en"
+        self._auto_translate = False
 
         self._setup_ui()
 
@@ -341,6 +470,39 @@ class ChatPanel(ctk.CTkFrame):
             command=self.clear_chat
         )
         self.clear_button.pack(pady=(5, 0))
+
+        # Translation toggle row
+        self.translate_frame = ctk.CTkFrame(self.input_frame, fg_color="transparent")
+        self.translate_frame.grid(row=1, column=0, columnspan=3, sticky="ew", padx=15, pady=(0, 8))
+
+        self.translate_label = ctk.CTkLabel(
+            self.translate_frame,
+            text=f" {DECORATIONS['block_med']} AUTO-TRANSLATE: ES {DECORATIONS['arrow_r']} EN",
+            font=ctk.CTkFont(family="Consolas", size=11),
+            text_color=COLORS["text_muted"]
+        )
+        self.translate_label.pack(side="left", padx=(0, 10))
+
+        self.translate_switch = ctk.CTkSwitch(
+            self.translate_frame,
+            text="",
+            width=40,
+            height=20,
+            fg_color=COLORS["bg_tertiary"],
+            progress_color=COLORS["matrix_green_dark"],
+            button_color=COLORS["matrix_green"],
+            button_hover_color=COLORS["matrix_green_bright"],
+            command=self._update_translate_label
+        )
+        self.translate_switch.pack(side="left")
+
+        self.translate_status = ctk.CTkLabel(
+            self.translate_frame,
+            text="OFF",
+            font=ctk.CTkFont(family="Consolas", size=11),
+            text_color=COLORS["text_muted"]
+        )
+        self.translate_status.pack(side="left", padx=(8, 0))
 
         # Status bar
         self.status_bar = ctk.CTkFrame(self, fg_color=COLORS["bg_dark"], height=28)
@@ -490,6 +652,10 @@ Comandos:
         self.messages.append({"role": role, "content": content})
 
         widget = ChatMessage(self.messages_frame, role, content)
+        if role == "assistant" and self._translator:
+            widget._translator = self._translator
+            widget._translate_source = self._translate_source
+            widget._translate_target = self._translate_target
         widget.pack(fill="x", pady=8, padx=5)
         self.message_widgets.append(widget)
 
@@ -507,6 +673,10 @@ Comandos:
         self.current_assistant_widget = ChatMessage(
             self.messages_frame, "assistant", DECORATIONS["cursor"]
         )
+        if self._translator:
+            self.current_assistant_widget._translator = self._translator
+            self.current_assistant_widget._translate_source = self._translate_source
+            self.current_assistant_widget._translate_target = self._translate_target
         self.current_assistant_widget.pack(fill="x", pady=8, padx=5)
         self.message_widgets.append(self.current_assistant_widget)
         self._scroll_to_bottom()
@@ -583,3 +753,37 @@ Comandos:
             msgs = [{"role": "system", "content": self._system_prompt}] + msgs
 
         return msgs
+
+    def set_translator(self, translator, source_lang: str, target_lang: str, auto_translate: bool):
+        """Set the translation service and update toggle state"""
+        self._translator = translator
+        self._translate_source = source_lang
+        self._translate_target = target_lang
+        self._auto_translate = auto_translate
+        if hasattr(self, 'translate_switch'):
+            if auto_translate:
+                self.translate_switch.select()
+            else:
+                self.translate_switch.deselect()
+            self._update_translate_label()
+
+    def translate_toggle_on(self) -> bool:
+        """Check if the translate toggle is active"""
+        if hasattr(self, 'translate_switch'):
+            return self.translate_switch.get() == 1
+        return False
+
+    def _update_translate_label(self):
+        """Update translation toggle label based on state"""
+        if self.translate_switch.get() == 1:
+            self.translate_status.configure(
+                text="ON",
+                text_color=COLORS["matrix_green"]
+            )
+            self.translate_label.configure(text_color=COLORS["matrix_green"])
+        else:
+            self.translate_status.configure(
+                text="OFF",
+                text_color=COLORS["text_muted"]
+            )
+            self.translate_label.configure(text_color=COLORS["text_muted"])
