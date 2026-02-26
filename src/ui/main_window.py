@@ -10,7 +10,7 @@ from PIL import Image, ImageTk
 from .theme import COLORS, DECORATIONS, ASCII_LOGO
 from .widgets import (
     MatrixFrame, MatrixButton, MatrixLabel, MatrixComboBox,
-    StatusIndicator, GlowingTitle
+    StatusIndicator, GlowingTitle, MatrixScrollableFrame, MatrixEntry
 )
 from .chat_panel import ChatPanel
 from .model_manager import ModelManagerPanel
@@ -187,9 +187,56 @@ class Sidebar(ctk.CTkFrame):
         sep2 = ctk.CTkFrame(self, fg_color=COLORS["border_green"], height=1)
         sep2.grid(row=4, column=0, sticky="ew", padx=10, pady=5)
 
+        # Chat list section
+        chats_frame = ctk.CTkFrame(self, fg_color="transparent")
+        chats_frame.grid(row=5, column=0, sticky="nsew", padx=10, pady=5)
+        chats_frame.grid_rowconfigure(1, weight=1)
+        chats_frame.grid_columnconfigure(0, weight=1)
+
+        # Header with NEW CHAT button
+        chats_header = ctk.CTkFrame(chats_frame, fg_color="transparent")
+        chats_header.grid(row=0, column=0, sticky="ew")
+        chats_header.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(
+            chats_header,
+            text=f" {DECORATIONS['h_line']*3} CHATS {DECORATIONS['h_line']*3}",
+            font=ctk.CTkFont(family="Consolas", size=10),
+            text_color=COLORS["text_muted"]
+        ).grid(row=0, column=0, sticky="w", pady=(0, 5))
+
+        new_chat_btn = MatrixButton(
+            chats_header,
+            text=f"{DECORATIONS['prompt']} NEW",
+            height=24,
+            width=60,
+            command=lambda: self.on_nav("new_chat")
+        )
+        new_chat_btn.grid(row=0, column=1, sticky="e", pady=(0, 5))
+
+        # Scrollable chat list
+        self.chat_list_frame = MatrixScrollableFrame(
+            chats_frame,
+            fg_color=COLORS["bg_dark"],
+            border_width=1,
+            border_color=COLORS["border_green"],
+        )
+        self.chat_list_frame.grid(row=1, column=0, sticky="nsew")
+        self.chat_list_frame.grid_columnconfigure(0, weight=1)
+
+        # Search field
+        self.chat_search = MatrixEntry(
+            chats_frame,
+            placeholder_text="Search chats...",
+            height=28,
+            width=200,
+        )
+        self.chat_search.grid(row=2, column=0, sticky="ew", pady=(5, 0))
+        self.chat_search.bind("<KeyRelease>", lambda e: self.on_nav("search_chats"))
+
         # Navigation buttons
         nav_frame = ctk.CTkFrame(self, fg_color="transparent")
-        nav_frame.grid(row=5, column=0, sticky="nsew", padx=10, pady=10)
+        nav_frame.grid(row=6, column=0, sticky="nsew", padx=10, pady=10)
 
         self.nav_buttons = {}
 
@@ -214,7 +261,7 @@ class Sidebar(ctk.CTkFrame):
 
         # Version info at bottom
         version_frame = ctk.CTkFrame(self, fg_color="transparent")
-        version_frame.grid(row=6, column=0, sticky="sew", padx=10, pady=10)
+        version_frame.grid(row=7, column=0, sticky="sew", padx=10, pady=10)
 
         ctk.CTkLabel(
             version_frame,
@@ -272,6 +319,88 @@ class Sidebar(ctk.CTkFrame):
     def set_model_callback(self, callback):
         """Set callback for model selection"""
         self.model_combo.configure(command=callback)
+
+    def update_chat_list(self, chats: list, active_id: str = None):
+        """Update the chat list display.
+
+        Args:
+            chats: List of dicts with id, title, updated_at
+            active_id: ID of the currently active chat
+        """
+        # Clear existing items
+        for widget in self.chat_list_frame.winfo_children():
+            widget.destroy()
+
+        self._chat_items = {}
+
+        for chat in chats:
+            item = self._create_chat_item(chat, is_active=(chat["id"] == active_id))
+            item.pack(fill="x", pady=2, padx=4)
+            self._chat_items[chat["id"]] = item
+
+    def _create_chat_item(self, chat: dict, is_active: bool = False) -> ctk.CTkFrame:
+        """Create a single chat list item."""
+        bg = COLORS["bg_tertiary"] if is_active else COLORS["bg_dark"]
+        border = COLORS["matrix_green"] if is_active else COLORS["border_green"]
+
+        item = ctk.CTkFrame(
+            self.chat_list_frame,
+            fg_color=bg,
+            border_color=border,
+            border_width=1,
+            corner_radius=4,
+            height=40,
+        )
+        item.grid_columnconfigure(0, weight=1)
+        item.grid_propagate(False)
+
+        # Title
+        title = chat.get("title", "Untitled")
+        if len(title) > 22:
+            title = title[:22] + "..."
+        title_label = ctk.CTkLabel(
+            item,
+            text=title,
+            font=ctk.CTkFont(family="Consolas", size=11),
+            text_color=COLORS["matrix_green"] if is_active else COLORS["matrix_green_dim"],
+            anchor="w",
+        )
+        title_label.grid(row=0, column=0, sticky="w", padx=8, pady=(4, 0))
+
+        # Date
+        date_str = chat.get("updated_at", "")[:10]
+        ctk.CTkLabel(
+            item,
+            text=date_str,
+            font=ctk.CTkFont(family="Consolas", size=9),
+            text_color=COLORS["text_muted"],
+            anchor="w",
+        ).grid(row=1, column=0, sticky="w", padx=8, pady=(0, 4))
+
+        # Delete button
+        del_btn = ctk.CTkButton(
+            item,
+            text=DECORATIONS["cross"],
+            font=ctk.CTkFont(family="Consolas", size=11),
+            width=24,
+            height=24,
+            fg_color="transparent",
+            hover_color="#330011",
+            text_color=COLORS["text_muted"],
+            command=lambda cid=chat["id"]: self.on_nav(f"delete_chat:{cid}"),
+        )
+        del_btn.grid(row=0, column=1, rowspan=2, sticky="e", padx=4)
+
+        # Click to load chat
+        chat_id = chat["id"]
+        for widget in [item, title_label]:
+            widget.bind("<Button-1>", lambda e, cid=chat_id: self.on_nav(f"load_chat:{cid}"))
+
+        return item
+
+    def get_search_query(self) -> str:
+        """Get current search text."""
+        return self.chat_search.get().strip()
 
 
 class MainWindow(ctk.CTk):
