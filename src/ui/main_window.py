@@ -367,10 +367,26 @@ class MainWindow(ctk.CTk):
     """Matrix-styled main application window"""
 
     def __init__(self, config_path: Path):
-        super().__init__()
+        # Set WM_CLASS BEFORE creating the window — className must be passed
+        # to CTk.__init__ so Tk sets it at window-creation time.
+        super().__init__(className='drago-model-runner')
 
-        # Set WM_CLASS to match .desktop StartupWMClass for dock icon
-        self.tk.call('tk', 'appname', 'drago-model-runner')
+        # Reinforce WM_CLASS for GNOME/KDE dock icon matching
+        try:
+            self.tk.call('tk', 'appname', 'drago-model-runner')
+        except Exception:
+            pass
+
+        # Set _NET_WM_PID so the desktop can match the window to the .desktop file
+        try:
+            import os
+            self.wm_attributes('-type', 'normal')
+            self.tk.call(
+                'wm', 'client', self._w,
+                f'{os.uname().nodename}'
+            )
+        except Exception:
+            pass
 
         # Set window icon
         icon_path = Path(__file__).parent.parent.parent / "icon.png"
