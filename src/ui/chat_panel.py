@@ -2,6 +2,7 @@
 import customtkinter as ctk
 from typing import List, Optional, Callable
 from datetime import datetime
+from pathlib import Path
 import re
 
 # Optional clipboard support
@@ -365,6 +366,8 @@ class ChatPanel(ctk.CTkFrame):
         self._translate_source = "es"
         self._translate_target = "en"
         self._auto_translate = False
+        self._current_chat: Optional[dict] = None
+        self._on_chat_updated: Optional[Callable[[dict], None]] = None
 
         self._setup_ui()
 
@@ -373,9 +376,28 @@ class ChatPanel(ctk.CTkFrame):
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(1, weight=1)
 
-        # Header
-        header = TerminalHeader(self, "NEURAL INTERFACE", "chat.session")
+        # Header with export button
+        header_frame = ctk.CTkFrame(self, fg_color="transparent")
+        header_frame.grid(row=0, column=0, sticky="ew")
+        header_frame.grid_columnconfigure(0, weight=1)
+
+        header = TerminalHeader(header_frame, "NEURAL INTERFACE", "chat.session")
         header.grid(row=0, column=0, sticky="ew")
+
+        self.export_btn = ctk.CTkButton(
+            header_frame,
+            text=f"{DECORATIONS['arrow_r']} EXPORT",
+            font=ctk.CTkFont(family="Consolas", size=10),
+            width=70,
+            height=24,
+            fg_color=COLORS["bg_tertiary"],
+            hover_color=COLORS["bg_hover"],
+            border_color=COLORS["matrix_green_dim"],
+            border_width=1,
+            text_color=COLORS["matrix_green"],
+            command=self._export_chat,
+        )
+        self.export_btn.grid(row=0, column=1, padx=10, pady=5, sticky="e")
 
         # Messages container
         self.messages_container = ctk.CTkFrame(self, fg_color=COLORS["bg_primary"])
@@ -661,6 +683,7 @@ Comandos:
 
         self.after(50, self._scroll_to_bottom)
         self._update_token_count()
+        self._notify_chat_updated()
 
         return widget
 
@@ -705,6 +728,7 @@ Comandos:
         self._toggle_generating(False)
         self._set_status("ready", "Ready")
         self._update_token_count()
+        self._notify_chat_updated()
         self._scroll_to_bottom()
 
     def _scroll_to_bottom(self):
@@ -735,6 +759,9 @@ Comandos:
         self._set_status("ready", "Session cleared")
         self._update_token_count()
         self._show_welcome()
+        self._current_chat = None
+        if self._on_chat_updated:
+            self._on_chat_updated(None)  # Signal to parent to create new chat
 
     def set_system_prompt(self, prompt: str):
         """Set the system prompt for this chat session"""
@@ -787,3 +814,102 @@ Comandos:
                 text_color=COLORS["text_muted"]
             )
             self.translate_label.configure(text_color=COLORS["text_muted"])
+
+    # ── Chat lifecycle methods ──────────────────────────────────────
+
+    def set_chat_callback(self, callback: Callable[[dict], None]):
+        """Set callback for when chat data changes (for auto-save)."""
+        self._on_chat_updated = callback
+
+    def load_chat(self, chat_data: dict):
+        """Load a chat session into the panel."""
+        # Clear current messages
+        for widget in self.message_widgets:
+            widget.destroy()
+        self.message_widgets.clear()
+        self.messages.clear()
+
+        if hasattr(self, '_welcome_widget') and self._welcome_widget.winfo_exists():
+            self._welcome_widget.destroy()
+
+        self._current_chat = chat_data
+
+        # Load messages
+        for msg in chat_data.get("messages", []):
+            widget = ChatMessage(self.messages_frame, msg["role"], msg["content"])
+            widget.pack(fill="x", pady=8, padx=5)
+            self.message_widgets.append(widget)
+            self.messages.append(msg)
+            # Wire translator for assistant messages
+            if msg["role"] == "assistant" and self._translator:
+                widget._translator = self._translator
+                widget._translate_source = self._translate_source
+                widget._translate_target = self._translate_target
+
+        if not chat_data.get("messages"):
+            self._show_welcome()
+
+        # Set system prompt if stored
+        if chat_data.get("system_prompt"):
+            self._system_prompt = chat_data["system_prompt"]
+
+        self._set_status("ready", "Chat loaded")
+        self._update_token_count()
+        self.after(50, self._scroll_to_bottom)
+
+    def get_current_chat(self) -> Optional[dict]:
+        """Get current chat data with latest messages."""
+        if self._current_chat:
+            self._current_chat["messages"] = self.messages.copy()
+            if self._system_prompt:
+                self._current_chat["system_prompt"] = self._system_prompt
+        return self._current_chat
+
+    def set_current_chat(self, chat_data: dict):
+        """Set current chat reference (used when creating new chat)."""
+        self._current_chat = chat_data
+
+    def _notify_chat_updated(self):
+        """Notify parent that chat data changed (for auto-save)."""
+        if self._on_chat_updated and self._current_chat:
+            self._current_chat["messages"] = self.messages.copy()
+            self._on_chat_updated(self._current_chat)
+
+    def _export_chat(self):
+        """Export current chat as Markdown file."""
+        from tkinter import filedialog
+
+        if not self._current_chat or not self.messages:
+            return
+
+        title = self._current_chat.get("title", "chat")
+        # Sanitize filename
+        safe_title = "".join(c for c in title if c.isalnum() or c in " -_")[:50].strip()
+
+        path = filedialog.asksaveasfilename(
+            title="Export Chat",
+            defaultextension=".md",
+            filetypes=[("Markdown", "*.md"), ("Text", "*.txt")],
+            initialfile=f"{safe_title}.md",
+        )
+        if not path:
+            return
+
+        # Build markdown
+        lines = [
+            f"# {title}",
+            f"**Model:** {self._current_chat.get('model', 'N/A')} | "
+            f"**Date:** {self._current_chat.get('created_at', '')[:10]}",
+            "",
+            "---",
+            "",
+        ]
+        for msg in self.messages:
+            role = "User" if msg["role"] == "user" else "DRAGO"
+            lines.append(f"**{role}:** {msg['content']}")
+            lines.append("")
+            lines.append("---")
+            lines.append("")
+
+        Path(path).write_text("\n".join(lines), encoding="utf-8")
+        self._set_status("ready", f"Exported to {Path(path).name}")
