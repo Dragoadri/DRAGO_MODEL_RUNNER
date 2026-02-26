@@ -69,47 +69,52 @@ class TranslationService:
                 if on_progress is not None:
                     on_progress(msg)
 
-            _progress("Updating Argos Translate package index...")
-            try:
-                package.update_package_index()
-            except Exception:
-                _progress("Index update failed (offline?), using cached...")
-
-            available = package.get_available_packages()
-
-            for from_code, to_code in [
+            needed_pairs = [
                 (source_lang, target_lang),
                 (target_lang, source_lang),
-            ]:
-                pair_label = f"{from_code}->{to_code}"
-                _progress(f"Checking language pack {pair_label}...")
+            ]
 
-                # Find matching package
-                pkg = next(
-                    (
-                        p
-                        for p in available
-                        if p.from_code == from_code and p.to_code == to_code
-                    ),
-                    None,
-                )
-
-                if pkg is None:
-                    _progress(f"Language pack {pair_label} not found in index")
-                    if on_complete is not None:
-                        on_complete(False)
-                    return
-
-                # Install only if not already installed
-                installed = package.get_installed_packages()
-                already_installed = any(
+            # Check what's already installed FIRST (fast, no network)
+            _progress("Checking installed language packs...")
+            installed = package.get_installed_packages()
+            missing_pairs = []
+            for from_code, to_code in needed_pairs:
+                already = any(
                     ip.from_code == from_code and ip.to_code == to_code
                     for ip in installed
                 )
-
-                if already_installed:
-                    _progress(f"Language pack {pair_label} already installed")
+                if already:
+                    _progress(f"Language pack {from_code}->{to_code} already installed")
                 else:
+                    missing_pairs.append((from_code, to_code))
+
+            # Only hit the network if we need to download something
+            if missing_pairs:
+                _progress("Updating Argos Translate package index...")
+                try:
+                    package.update_package_index()
+                except Exception:
+                    _progress("Index update failed (offline?), using cached...")
+
+                available = package.get_available_packages()
+
+                for from_code, to_code in missing_pairs:
+                    pair_label = f"{from_code}->{to_code}"
+                    pkg = next(
+                        (
+                            p
+                            for p in available
+                            if p.from_code == from_code and p.to_code == to_code
+                        ),
+                        None,
+                    )
+
+                    if pkg is None:
+                        _progress(f"Language pack {pair_label} not found in index")
+                        if on_complete is not None:
+                            on_complete(False)
+                        return
+
                     _progress(f"Downloading language pack {pair_label}...")
                     download_path = pkg.download()
                     _progress(f"Installing language pack {pair_label}...")
@@ -119,10 +124,7 @@ class TranslationService:
             installed_languages = translate.get_installed_languages()
             lang_map = {lang.code: lang for lang in installed_languages}
 
-            for from_code, to_code in [
-                (source_lang, target_lang),
-                (target_lang, source_lang),
-            ]:
+            for from_code, to_code in needed_pairs:
                 src = lang_map.get(from_code)
                 dst = lang_map.get(to_code)
                 if src is not None and dst is not None:
