@@ -7,11 +7,12 @@ import threading
 import random
 from PIL import Image, ImageTk
 
-from .theme import COLORS, DECORATIONS, ASCII_LOGO
 from .widgets import (
     MatrixFrame, MatrixButton, MatrixLabel, MatrixComboBox,
-    StatusIndicator, GlowingTitle, MatrixScrollableFrame, MatrixEntry
+    StatusIndicator, GlowingTitle, MatrixScrollableFrame, MatrixEntry,
+    MatrixIconButton
 )
+from .theme import COLORS, DECORATIONS, ASCII_LOGO, NAV_ICONS, RADIUS
 from .chat_panel import ChatPanel
 from .model_manager import ModelManagerPanel
 from .settings_panel import SettingsPanel
@@ -102,98 +103,109 @@ class Sidebar(ctk.CTkFrame):
 
     def _setup_ui(self):
         """Setup sidebar UI"""
-        self.grid_rowconfigure(5, weight=1)
+        self.grid_rowconfigure(4, weight=1)
+        self.grid_columnconfigure(0, weight=1)
 
-        # Logo area with Matrix effect
+        # ── Compact Logo + Status ──
         logo_frame = ctk.CTkFrame(self, fg_color=COLORS["bg_dark"], corner_radius=0)
-        logo_frame.grid(row=0, column=0, sticky="ew", pady=(0, 10))
+        logo_frame.grid(row=0, column=0, sticky="ew")
+        logo_frame.grid_columnconfigure(0, weight=1)
 
-        # ASCII Logo
-        logo_text = """
-╔══════════════════════╗
-║  ██████╗ ██████╗     ║
-║  ██╔══██╗██╔══██╗    ║
-║  ██║  ██║██████╔╝    ║
-║  ██║  ██║██╔══██╗    ║
-║  ██████╔╝██║  ██║    ║
-║  ╚═════╝ ╚═╝  ╚═╝    ║
-║    DRAGO RUNNER      ║
-╚══════════════════════╝"""
+        logo_row = ctk.CTkFrame(logo_frame, fg_color="transparent")
+        logo_row.pack(fill="x", padx=12, pady=10)
+        logo_row.grid_columnconfigure(1, weight=1)
 
-        logo_label = ctk.CTkLabel(
-            logo_frame,
+        logo_text = f"{DECORATIONS['block_dark']}{DECORATIONS['block']}{DECORATIONS['block_dark']}"
+        ctk.CTkLabel(
+            logo_row,
             text=logo_text,
-            font=ctk.CTkFont(family="Consolas", size=9),
+            font=ctk.CTkFont(family="Consolas", size=16),
             text_color=COLORS["matrix_green"],
-            justify="center"
+        ).grid(row=0, column=0, padx=(0, 8))
+
+        ctk.CTkLabel(
+            logo_row,
+            text="DRAGO RUNNER",
+            font=ctk.CTkFont(family="Consolas", size=14, weight="bold"),
+            text_color=COLORS["matrix_green_bright"],
+            anchor="w",
+        ).grid(row=0, column=1, sticky="w")
+
+        self.status_indicator = StatusIndicator(logo_row)
+        self.status_indicator.grid(row=0, column=2, padx=(4, 0))
+
+        self.gpu_label = ctk.CTkLabel(
+            logo_frame,
+            text=f"  {DECORATIONS['arrow_r']} GPU: Detecting...",
+            font=ctk.CTkFont(family="Consolas", size=10),
+            text_color=COLORS["text_muted"],
+            anchor="w",
         )
-        logo_label.pack(pady=15)
+        self.gpu_label.pack(fill="x", padx=12, pady=(0, 6))
 
-        # Separator
-        sep = ctk.CTkFrame(self, fg_color=COLORS["border_green"], height=1)
-        sep.grid(row=1, column=0, sticky="ew", padx=10)
-
-        # Model selector
+        # ── Model Selector ──
         model_frame = ctk.CTkFrame(self, fg_color="transparent")
-        model_frame.grid(row=2, column=0, sticky="ew", padx=10, pady=15)
+        model_frame.grid(row=1, column=0, sticky="ew", padx=10, pady=(8, 4))
+        model_frame.grid_columnconfigure(0, weight=1)
 
         MatrixLabel(
             model_frame,
-            text=f"{DECORATIONS['block']} ACTIVE MODEL",
-            size="sm",
-            bright=True
-        ).pack(anchor="w", pady=(0, 8))
+            text=f"{DECORATIONS['block']} MODELO",
+            size="xs",
+            bright=True,
+        ).grid(row=0, column=0, sticky="w", pady=(0, 4))
 
-        self.model_combo = MatrixComboBox(
-            model_frame,
-            values=["Loading..."],
-            width=200
-        )
-        self.model_combo.pack(fill="x")
+        self.model_combo = MatrixComboBox(model_frame, values=["Loading..."])
+        self.model_combo.grid(row=1, column=0, sticky="ew")
 
         refresh_btn = MatrixButton(
             model_frame,
             text=f"{DECORATIONS['block_med']} Refresh",
-            height=28,
-            command=lambda: self.on_nav("refresh_models")
+            height=26,
+            command=lambda: self.on_nav("refresh_models"),
         )
-        refresh_btn.pack(fill="x", pady=(8, 0))
+        refresh_btn.grid(row=2, column=0, sticky="ew", pady=(4, 0))
 
-        # Status indicator
-        status_frame = MatrixFrame(self)
-        status_frame.grid(row=3, column=0, sticky="ew", padx=10, pady=10)
+        # ── Horizontal Nav Tabs ──
+        nav_frame = ctk.CTkFrame(self, fg_color=COLORS["bg_dark"], corner_radius=0)
+        nav_frame.grid(row=2, column=0, sticky="ew", padx=0, pady=(8, 0))
 
-        status_header = ctk.CTkLabel(
-            status_frame,
-            text=f" {DECORATIONS['h_line']*3} STATUS {DECORATIONS['h_line']*3}",
-            font=ctk.CTkFont(family="Consolas", size=10),
-            text_color=COLORS["text_muted"]
-        )
-        status_header.pack(anchor="w", padx=10, pady=(8, 5))
+        nav_inner = ctk.CTkFrame(nav_frame, fg_color="transparent")
+        nav_inner.pack(fill="x", padx=6, pady=6)
+        for i in range(5):
+            nav_inner.grid_columnconfigure(i, weight=1)
 
-        self.status_indicator = StatusIndicator(status_frame)
-        self.status_indicator.pack(anchor="w", padx=15, pady=(0, 10))
+        self.nav_buttons = {}
+        nav_items = [
+            ("chat", NAV_ICONS["chat"], "CHAT"),
+            ("models", NAV_ICONS["models"], "FORGE"),
+            ("system", NAV_ICONS["system"], "SYS"),
+            ("help", NAV_ICONS["help"], "HELP"),
+            ("settings", NAV_ICONS["settings"], "CFG"),
+        ]
 
-        # GPU info
-        self.gpu_label = ctk.CTkLabel(
-            status_frame,
-            text=f"  {DECORATIONS['arrow_r']} GPU: Detecting...",
-            font=ctk.CTkFont(family="Consolas", size=10),
-            text_color=COLORS["text_muted"]
-        )
-        self.gpu_label.pack(anchor="w", padx=10, pady=(0, 10))
+        for idx, (name, icon, label) in enumerate(nav_items):
+            is_active = (name == "chat")
+            btn = MatrixIconButton(
+                nav_inner,
+                icon=icon,
+                label=label,
+                active=is_active,
+                command=lambda n=name: self._on_nav_click(n),
+            )
+            btn.grid(row=0, column=idx, padx=2, sticky="ew")
+            self.nav_buttons[name] = btn
 
-        # Separator
-        sep2 = ctk.CTkFrame(self, fg_color=COLORS["border_green"], height=1)
-        sep2.grid(row=4, column=0, sticky="ew", padx=10, pady=5)
+        # ── Separator ──
+        sep = ctk.CTkFrame(self, fg_color=COLORS["border_green"], height=1)
+        sep.grid(row=3, column=0, sticky="ew", padx=10, pady=6)
 
-        # Chat list section
+        # ── Chat List Section ──
         chats_frame = ctk.CTkFrame(self, fg_color="transparent")
-        chats_frame.grid(row=5, column=0, sticky="nsew", padx=10, pady=5)
-        chats_frame.grid_rowconfigure(1, weight=1)
+        chats_frame.grid(row=4, column=0, sticky="nsew", padx=10, pady=(0, 10))
+        chats_frame.grid_rowconfigure(2, weight=1)
         chats_frame.grid_columnconfigure(0, weight=1)
 
-        # Header with NEW CHAT button
         chats_header = ctk.CTkFrame(chats_frame, fg_color="transparent")
         chats_header.grid(row=0, column=0, sticky="ew")
         chats_header.grid_columnconfigure(0, weight=1)
@@ -202,93 +214,41 @@ class Sidebar(ctk.CTkFrame):
             chats_header,
             text=f" {DECORATIONS['h_line']*3} CHATS {DECORATIONS['h_line']*3}",
             font=ctk.CTkFont(family="Consolas", size=10),
-            text_color=COLORS["text_muted"]
-        ).grid(row=0, column=0, sticky="w", pady=(0, 5))
+            text_color=COLORS["text_muted"],
+        ).grid(row=0, column=0, sticky="w")
 
         new_chat_btn = MatrixButton(
             chats_header,
             text=f"{DECORATIONS['prompt']} NEW",
             height=24,
             width=60,
-            command=lambda: self.on_nav("new_chat")
+            command=lambda: self.on_nav("new_chat"),
         )
-        new_chat_btn.grid(row=0, column=1, sticky="e", pady=(0, 5))
+        new_chat_btn.grid(row=0, column=1, sticky="e")
 
-        # Scrollable chat list
+        self.chat_search = MatrixEntry(
+            chats_frame,
+            placeholder_text="Search chats...",
+            height=28,
+        )
+        self.chat_search.grid(row=1, column=0, sticky="ew", pady=(6, 4))
+        self.chat_search.bind("<KeyRelease>", lambda e: self.on_nav("search_chats"))
+
         self.chat_list_frame = MatrixScrollableFrame(
             chats_frame,
             fg_color=COLORS["bg_dark"],
             border_width=1,
             border_color=COLORS["border_green"],
         )
-        self.chat_list_frame.grid(row=1, column=0, sticky="nsew")
+        self.chat_list_frame.grid(row=2, column=0, sticky="nsew")
         self.chat_list_frame.grid_columnconfigure(0, weight=1)
-
-        # Search field
-        self.chat_search = MatrixEntry(
-            chats_frame,
-            placeholder_text="Search chats...",
-            height=28,
-            width=200,
-        )
-        self.chat_search.grid(row=2, column=0, sticky="ew", pady=(5, 0))
-        self.chat_search.bind("<KeyRelease>", lambda e: self.on_nav("search_chats"))
-
-        # Navigation buttons
-        nav_frame = ctk.CTkFrame(self, fg_color="transparent")
-        nav_frame.grid(row=6, column=0, sticky="nsew", padx=10, pady=10)
-
-        self.nav_buttons = {}
-
-        nav_items = [
-            ("chat", f"{DECORATIONS['prompt']} NEURAL CHAT", True),
-            ("models", f"{DECORATIONS['block']} MODEL FORGE", False),
-            ("system", f"{DECORATIONS['block_med']} SISTEMA", False),
-            ("help", f"{DECORATIONS['circle']} AYUDA/FAQ", False),
-            ("settings", f"{DECORATIONS['arrow_r']} CONFIG", False),
-        ]
-
-        for name, text, is_active in nav_items:
-            btn = MatrixButton(
-                nav_frame,
-                text=text,
-                height=40,
-                primary=is_active,
-                command=lambda n=name: self._on_nav_click(n)
-            )
-            btn.pack(fill="x", pady=4)
-            self.nav_buttons[name] = btn
-
-        # Version info at bottom
-        version_frame = ctk.CTkFrame(self, fg_color="transparent")
-        version_frame.grid(row=7, column=0, sticky="sew", padx=10, pady=10)
-
-        ctk.CTkLabel(
-            version_frame,
-            text=f"{DECORATIONS['h_line']*8}\nv1.0.0 // Matrix Edition\n{DECORATIONS['h_line']*8}",
-            font=ctk.CTkFont(family="Consolas", size=9),
-            text_color=COLORS["text_muted"],
-            justify="center"
-        ).pack()
 
     def _on_nav_click(self, panel_name: str):
         """Handle navigation click"""
         self.current_panel = panel_name
 
-        # Update button styles
         for name, btn in self.nav_buttons.items():
-            if name == panel_name:
-                btn.configure(
-                    fg_color=COLORS["matrix_green_dark"],
-                    border_color=COLORS["matrix_green"],
-                    text_color=COLORS["bg_dark"]
-                )
-            else:
-                btn.configure(
-                    fg_color=COLORS["bg_tertiary"],
-                    border_color=COLORS["matrix_green_dim"],
-                    text_color=COLORS["matrix_green"]
-                )
+            btn.set_active(name == panel_name)
 
         self.on_nav(panel_name)
 
@@ -421,6 +381,9 @@ class MainWindow(ctk.CTk):
 
         self.config_path = config_path
         self.current_model: Optional[str] = None
+
+        # Debounce timer for chat list refresh
+        self._refresh_timer: Optional[str] = None
 
         # Initialize core
         self._init_core()
@@ -928,10 +891,21 @@ class MainWindow(ctk.CTk):
             return
         chat_data["model"] = self.current_model or ""
         self.chat_storage.save_chat(chat_data)
-        self._refresh_chat_list()
+        # Debounced refresh — avoids re-rendering the sidebar on every token
+        self._schedule_refresh_chat_list()
+
+    def _schedule_refresh_chat_list(self, delay_ms: int = 500):
+        """Schedule a chat list refresh with debounce.
+
+        Multiple calls within *delay_ms* are collapsed into one.
+        """
+        if self._refresh_timer is not None:
+            self.after_cancel(self._refresh_timer)
+        self._refresh_timer = self.after(delay_ms, self._refresh_chat_list)
 
     def _refresh_chat_list(self):
-        """Refresh the chat list in the sidebar."""
+        """Refresh the chat list in the sidebar (fast — reads from cache)."""
+        self._refresh_timer = None
         query = self.sidebar.get_search_query()
         if query:
             chats = self.chat_storage.search_chats(query)
