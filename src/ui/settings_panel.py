@@ -44,7 +44,13 @@ class SettingsPanel(ctk.CTkFrame):
         return {
             "ollama": {"host": "http://localhost:11434", "timeout": 120},
             "ui": {"theme": "dark", "font_size": 14},
-            "paths": {"models_dir": "~/ai-models"}
+            "paths": {"models_dir": "~/ai-models"},
+            "translation": {
+                "enabled": True,
+                "source_lang": "es",
+                "target_lang": "en",
+                "auto_translate_input": True
+            }
         }
 
     def _save_settings(self):
@@ -165,6 +171,76 @@ class SettingsPanel(ctk.CTkFrame):
             width=80,
             command=self._browse_models_dir
         ).grid(row=0, column=2, padx=10, pady=10)
+
+        # === TRANSLATION SECTION ===
+        trans_section = self._create_section(content, "TRANSLATION")
+        trans_section.pack(fill="x", pady=(0, 15))
+
+        trans_grid = MatrixFrame(trans_section)
+        trans_grid.pack(fill="x", padx=15, pady=15)
+        trans_grid.grid_columnconfigure(1, weight=1)
+
+        trans_config = self.settings.get("translation", {})
+
+        # Enable translation
+        MatrixLabel(trans_grid, text=f"{DECORATIONS['arrow_r']} Enabled:", size="sm").grid(
+            row=0, column=0, padx=15, pady=10, sticky="w"
+        )
+        self.trans_enabled_switch = ctk.CTkSwitch(
+            trans_grid,
+            text="",
+            width=40,
+            height=20,
+            fg_color=COLORS["bg_tertiary"],
+            progress_color=COLORS["matrix_green_dark"],
+            button_color=COLORS["matrix_green"],
+            button_hover_color=COLORS["matrix_green_bright"],
+        )
+        if trans_config.get("enabled", True):
+            self.trans_enabled_switch.select()
+        self.trans_enabled_switch.grid(row=0, column=1, padx=10, pady=10, sticky="w")
+
+        # Source language (user's language)
+        MatrixLabel(trans_grid, text=f"{DECORATIONS['arrow_r']} Your language:", size="sm").grid(
+            row=1, column=0, padx=15, pady=10, sticky="w"
+        )
+        self.source_lang_combo = MatrixComboBox(
+            trans_grid,
+            values=["es", "fr", "de", "it", "pt", "zh", "ja", "ko", "ru", "ar"],
+            width=100
+        )
+        self.source_lang_combo.set(trans_config.get("source_lang", "es"))
+        self.source_lang_combo.grid(row=1, column=1, padx=10, pady=10, sticky="w")
+
+        # Target language (model's language)
+        MatrixLabel(trans_grid, text=f"{DECORATIONS['arrow_r']} Model language:", size="sm").grid(
+            row=2, column=0, padx=15, pady=10, sticky="w"
+        )
+        self.target_lang_combo = MatrixComboBox(
+            trans_grid,
+            values=["en", "es", "fr", "de", "zh", "ja"],
+            width=100
+        )
+        self.target_lang_combo.set(trans_config.get("target_lang", "en"))
+        self.target_lang_combo.grid(row=2, column=1, padx=10, pady=10, sticky="w")
+
+        # Auto-translate input
+        MatrixLabel(trans_grid, text=f"{DECORATIONS['arrow_r']} Auto-translate input:", size="sm").grid(
+            row=3, column=0, padx=15, pady=10, sticky="w"
+        )
+        self.auto_translate_switch = ctk.CTkSwitch(
+            trans_grid,
+            text="",
+            width=40,
+            height=20,
+            fg_color=COLORS["bg_tertiary"],
+            progress_color=COLORS["matrix_green_dark"],
+            button_color=COLORS["matrix_green"],
+            button_hover_color=COLORS["matrix_green_bright"],
+        )
+        if trans_config.get("auto_translate_input", True):
+            self.auto_translate_switch.select()
+        self.auto_translate_switch.grid(row=3, column=1, padx=10, pady=10, sticky="w")
 
         # === ABOUT SECTION ===
         about_section = self._create_section(content, "ABOUT")
@@ -296,6 +372,12 @@ Designed for running uncensored models locally.
         self.settings["ui"]["theme"] = self.theme_combo.get()
         self.settings["ui"]["font_size"] = int(self.font_combo.get())
         self.settings["paths"]["models_dir"] = self.models_dir_entry.get()
+
+        self.settings.setdefault("translation", {})
+        self.settings["translation"]["enabled"] = self.trans_enabled_switch.get() == 1
+        self.settings["translation"]["source_lang"] = self.source_lang_combo.get()
+        self.settings["translation"]["target_lang"] = self.target_lang_combo.get()
+        self.settings["translation"]["auto_translate_input"] = self.auto_translate_switch.get() == 1
 
         self._save_settings()
 
