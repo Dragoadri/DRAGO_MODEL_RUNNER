@@ -1,13 +1,20 @@
-"""Persistent chat storage using JSON files"""
+"""Persistent chat storage using JSON files with in-memory metadata cache"""
 import json
 import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+# Maximum number of chats returned by list_chats / search_chats
+_MAX_LIST = 50
+
 
 class ChatStorage:
-    """Manages chat sessions as JSON files in a local directory."""
+    """Manages chat sessions as JSON files in a local directory.
+
+    Keeps a lightweight in-memory cache of chat metadata so that
+    list_chats() never has to re-read every file on disk.
+    """
 
     def __init__(self, chats_dir: Optional[str] = None):
         if chats_dir:
@@ -15,6 +22,33 @@ class ChatStorage:
         else:
             self.chats_dir = Path.home() / ".drago-model-runner" / "chats"
         self.chats_dir.mkdir(parents=True, exist_ok=True)
+
+        # {chat_id: {id, title, model, updated_at, message_count}}
+        self._cache: dict[str, dict] = {}
+        self._build_cache()
+
+    # ── Cache helpers ─────────────────────────────────────────────
+
+    def _build_cache(self) -> None:
+        """One-time scan of all JSON files to populate the metadata cache."""
+        for path in self.chats_dir.glob("*.json"):
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+                self._cache[data["id"]] = self._extract_meta(data)
+            except Exception:
+                continue
+
+    @staticmethod
+    def _extract_meta(data: dict) -> dict:
+        return {
+            "id": data["id"],
+            "title": data.get("title", "Untitled"),
+            "model": data.get("model", ""),
+            "updated_at": data.get("updated_at", ""),
+            "message_count": len(data.get("messages", [])),
+        }
+
+    # ── Public API ────────────────────────────────────────────────
 
     def new_chat(self, model: str = "", system_prompt: str = "") -> dict:
         """Create a new empty chat and return its data."""
@@ -28,6 +62,7 @@ class ChatStorage:
             "messages": [],
         }
         self._write(chat)
+        self._cache[chat["id"]] = self._extract_meta(chat)
         return chat
 
     def save_chat(self, chat_data: dict) -> None:
@@ -44,6 +79,7 @@ class ChatStorage:
                 if len(first_user) > 40:
                     chat_data["title"] += "..."
         self._write(chat_data)
+        self._cache[chat_data["id"]] = self._extract_meta(chat_data)
 
     def load_chat(self, chat_id: str) -> Optional[dict]:
         """Load a chat by ID. Returns None if not found."""
@@ -55,62 +91,68 @@ class ChatStorage:
         except Exception:
             return None
 
-    def list_chats(self) -> list[dict]:
-        """List all chats (id, title, model, updated_at), newest first."""
-        chats = []
-        for path in self.chats_dir.glob("*.json"):
-            try:
-                data = json.loads(path.read_text(encoding="utf-8"))
-                chats.append({
-                    "id": data["id"],
-                    "title": data.get("title", "Untitled"),
-                    "model": data.get("model", ""),
-                    "updated_at": data.get("updated_at", ""),
-                    "message_count": len(data.get("messages", [])),
-                })
-            except Exception:
-                continue
-        chats.sort(key=lambda c: c["updated_at"], reverse=True)
-        return chats
+    def list_chats(self, limit: int = _MAX_LIST) -> list[dict]:
+        """List chats (id, title, model, updated_at), newest first.
+
+        Only returns chats that have at least one message (skips empty
+        "New Chat" entries).  Returns at most *limit* entries from the
+        in-memory cache (no disk I/O).
+        """
+        chats = sorted(
+            (c for c in self._cache.values() if c.get("message_count", 0) > 0),
+            key=lambda c: c["updated_at"],
+            reverse=True,
+        )
+        return chats[:limit]
 
     def delete_chat(self, chat_id: str) -> bool:
         """Delete a chat file. Returns True if deleted."""
         path = self.chats_dir / f"{chat_id}.json"
+        self._cache.pop(chat_id, None)
         if path.exists():
             path.unlink()
             return True
         return False
 
-    def search_chats(self, query: str) -> list[dict]:
-        """Search chats by title and message content."""
+    def search_chats(self, query: str, limit: int = _MAX_LIST) -> list[dict]:
+        """Search chats by title (from cache) and message content (from disk).
+
+        Title matches come from the fast in-memory cache.  Only when a title
+        doesn't match do we fall back to reading the file from disk.
+        """
         query_lower = query.lower()
-        results = []
-        for path in self.chats_dir.glob("*.json"):
-            try:
-                data = json.loads(path.read_text(encoding="utf-8"))
-                # Search title
-                if query_lower in data.get("title", "").lower():
-                    results.append({
-                        "id": data["id"],
-                        "title": data.get("title", "Untitled"),
-                        "model": data.get("model", ""),
-                        "updated_at": data.get("updated_at", ""),
-                    })
-                    continue
-                # Search messages
-                for msg in data.get("messages", []):
-                    if query_lower in msg.get("content", "").lower():
-                        results.append({
-                            "id": data["id"],
-                            "title": data.get("title", "Untitled"),
-                            "model": data.get("model", ""),
-                            "updated_at": data.get("updated_at", ""),
-                        })
-                        break
-            except Exception:
+        results: list[dict] = []
+
+        # Fast pass: title matches from cache (skip empty chats)
+        title_matched_ids: set[str] = set()
+        for meta in self._cache.values():
+            if meta.get("message_count", 0) == 0:
                 continue
+            if query_lower in meta.get("title", "").lower():
+                results.append(meta)
+                title_matched_ids.add(meta["id"])
+                if len(results) >= limit:
+                    break
+
+        # Slow pass: content search (only for chats not already matched)
+        if len(results) < limit:
+            for path in self.chats_dir.glob("*.json"):
+                chat_id = path.stem
+                if chat_id in title_matched_ids:
+                    continue
+                try:
+                    data = json.loads(path.read_text(encoding="utf-8"))
+                    for msg in data.get("messages", []):
+                        if query_lower in msg.get("content", "").lower():
+                            results.append(self._extract_meta(data))
+                            break
+                except Exception:
+                    continue
+                if len(results) >= limit:
+                    break
+
         results.sort(key=lambda c: c["updated_at"], reverse=True)
-        return results
+        return results[:limit]
 
     def export_chat(self, chat_id: str) -> Optional[str]:
         """Export a chat as Markdown. Returns None if not found."""
