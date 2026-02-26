@@ -17,7 +17,7 @@ from .model_manager import ModelManagerPanel
 from .settings_panel import SettingsPanel
 from .help_panel import HelpPanel
 from .system_panel import SystemPanel
-from ..core import OllamaClient, GGUFManager
+from ..core import OllamaClient, GGUFManager, TranslationService
 
 
 class MatrixRain(ctk.CTkCanvas):
@@ -405,6 +405,14 @@ class MainWindow(ctk.CTk):
         models_dir = paths_config.get("models_dir", "~/ai-models")
         self.gguf_manager = GGUFManager([models_dir])
 
+        # Translation
+        translation_config = settings.get("translation", {})
+        self.translation_enabled = translation_config.get("enabled", True)
+        self.translation_source = translation_config.get("source_lang", "es")
+        self.translation_target = translation_config.get("target_lang", "en")
+        self.auto_translate_input = translation_config.get("auto_translate_input", True)
+        self.translator = TranslationService.get_instance()
+
     def _setup_ui(self):
         """Setup main UI"""
         self.grid_columnconfigure(1, weight=1)
@@ -463,6 +471,26 @@ class MainWindow(ctk.CTk):
         def startup():
             # Check Ollama
             is_running = self.ollama.is_running()
+
+            # Initialize translation
+            if self.translation_enabled:
+                def on_trans_progress(msg):
+                    self.after(0, lambda: self.sidebar.set_status("loading", msg))
+
+                def on_trans_complete(success):
+                    self.after(0, lambda: self.chat_panel.set_translator(
+                        self.translator,
+                        self.translation_source,
+                        self.translation_target,
+                        self.auto_translate_input
+                    ))
+
+                self.translator.initialize(
+                    source_lang=self.translation_source,
+                    target_lang=self.translation_target,
+                    on_progress=on_trans_progress,
+                    on_complete=on_trans_complete,
+                )
 
             # Detect GPU
             gpu_info = self._detect_gpu()
@@ -639,6 +667,12 @@ class MainWindow(ctk.CTk):
         models_dir = paths_config.get("models_dir", "~/ai-models")
         self.gguf_manager = GGUFManager([models_dir])
 
+        translation_config = settings.get("translation", {})
+        self.translation_enabled = translation_config.get("enabled", True)
+        self.translation_source = translation_config.get("source_lang", "es")
+        self.translation_target = translation_config.get("target_lang", "en")
+        self.auto_translate_input = translation_config.get("auto_translate_input", True)
+
         self._startup_sequence()
 
     def _on_chat_stop(self):
@@ -670,7 +704,19 @@ class MainWindow(ctk.CTk):
         # Start streaming response
         self.chat_panel.start_assistant_message()
 
+        # Get messages and translate if needed
         messages = self.chat_panel.get_messages()
+        if self.auto_translate_input and self.translator.is_ready() and self.chat_panel.translate_toggle_on():
+            translated_messages = []
+            for msg in messages:
+                if msg["role"] == "user":
+                    translated_text = self.translator.translate(
+                        msg["content"], self.translation_source, self.translation_target
+                    )
+                    translated_messages.append({"role": "user", "content": translated_text})
+                else:
+                    translated_messages.append(msg)
+            messages = translated_messages
 
         options = {
             "temperature": 0.7,
