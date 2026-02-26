@@ -147,62 +147,31 @@ class ChatMessage(ctk.CTkFrame):
         sep = ctk.CTkFrame(self, fg_color=COLORS["border_dim"], height=1)
         sep.grid(row=1, column=0, sticky="ew", padx=12, pady=2)
 
-        # Content - selectable textbox instead of label
+        # Content label — auto-sizes to text, no empty space
         display_content = parse_markdown_simple(content) if not is_user else content
 
-        self.content_textbox = MatrixTextbox(
+        self.content_label = ctk.CTkLabel(
             self,
-            height=10,
-            wrap="word",
-            fg_color=bg_color,
-            border_width=0,
-            text_color=self._content_color,
+            text=display_content,
             font=ctk.CTkFont(family="Consolas", size=14),
+            text_color=self._content_color,
+            anchor="nw",
+            justify="left",
+            wraplength=700,
         )
-        self.content_textbox.grid(row=2, column=0, sticky="ew", padx=12, pady=(4, 8))
+        self.content_label.grid(row=2, column=0, sticky="ew", padx=12, pady=(4, 8))
 
-        # Hide the internal scrollbar completely
-        try:
-            self.content_textbox._scrollbar.grid_forget()
-        except Exception:
-            pass
-
-        self.content_textbox.insert("1.0", display_content)
-        self.content_textbox.configure(state="disabled")
-
-        # Auto-resize textbox height based on content
-        self.after(50, self._auto_resize)
-        self.bind("<Configure>", lambda e: self.after(50, self._auto_resize), add="+")
-
-    def _auto_resize(self):
-        """Auto-resize the textbox to fit all content (no internal scroll)"""
-        try:
-            self.content_textbox.configure(state="normal")
-            inner = self.content_textbox._textbox
-            # Measure actual pixel height needed via tk dlineinfo
-            inner.update_idletasks()
-            last_index = inner.index("end-1c")
-            bbox = inner.dlineinfo(last_index)
-            if bbox:
-                # bbox = (x, y, width, height, baseline) - y + height = total content height
-                new_height = bbox[1] + bbox[3] + 4
-                new_height = max(30, new_height)
-            else:
-                # Fallback: count display lines
-                display_lines = inner.count("1.0", "end", "displaylines")
-                if display_lines:
-                    num_lines = display_lines[0] if isinstance(display_lines, tuple) else display_lines
-                else:
-                    num_lines = int(self.content_textbox.index("end-1c").split(".")[0])
-                new_height = max(30, num_lines * 20 + 4)
-            self.content_textbox.configure(height=new_height, state="disabled")
-        except Exception:
+        # Dynamic wraplength on resize
+        def _update_wrap(event=None):
             try:
-                num_lines = int(self.content_textbox.index("end-1c").split(".")[0])
-                new_height = max(30, num_lines * 20 + 4)
-                self.content_textbox.configure(height=new_height, state="disabled")
+                self.content_label.configure(wraplength=max(200, self.winfo_width() - 40))
             except Exception:
                 pass
+        self.bind("<Configure>", _update_wrap, add="+")
+
+    def _auto_resize(self):
+        """No-op — CTkLabel auto-sizes to content."""
+        pass
 
     def _copy_content(self):
         """Copy message content to clipboard"""
@@ -231,30 +200,17 @@ class ChatMessage(ctk.CTkFrame):
         """Update message content (for streaming)"""
         self.raw_content = content
         display = parse_markdown_simple(content) if self.role != "user" else content
-        self.content_textbox.configure(state="normal")
-        self.content_textbox.delete("1.0", "end")
-        self.content_textbox.insert("1.0", display + DECORATIONS["cursor"])
-        self.content_textbox.configure(state="disabled")
-        # Throttle resize: only every ~300ms during streaming
-        now = id(content)  # cheap unique marker
-        if not hasattr(self, '_resize_pending') or not self._resize_pending:
-            self._resize_pending = True
-            self.after(300, self._throttled_resize)
+        self.content_label.configure(text=display + DECORATIONS["cursor"])
 
     def _throttled_resize(self):
-        """Resize callback that resets the throttle flag."""
-        self._resize_pending = False
-        self._auto_resize()
+        """No-op — CTkLabel auto-sizes."""
+        pass
 
     def finish_content(self, content: str):
         """Finalize content (remove cursor)"""
         self.raw_content = content
         display = parse_markdown_simple(content) if self.role != "user" else content
-        self.content_textbox.configure(state="normal")
-        self.content_textbox.delete("1.0", "end")
-        self.content_textbox.insert("1.0", display)
-        self.content_textbox.configure(state="disabled")
-        self.after(10, self._auto_resize)
+        self.content_label.configure(text=display)
 
     def _toggle_translation(self):
         """Toggle translation display"""
