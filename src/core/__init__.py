@@ -2,5 +2,6 @@
 from .ollama_client import OllamaClient
 from .model_config import ModelConfig, ModelParameters
 from .gguf_manager import GGUFManager
+from .translation_service import TranslationService
 
-__all__ = ["OllamaClient", "ModelConfig", "ModelParameters", "GGUFManager"]
+__all__ = ["OllamaClient", "ModelConfig", "ModelParameters", "GGUFManager", "TranslationService"]
