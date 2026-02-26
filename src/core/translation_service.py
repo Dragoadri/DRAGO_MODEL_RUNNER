@@ -70,7 +70,10 @@ class TranslationService:
                     on_progress(msg)
 
             _progress("Updating Argos Translate package index...")
-            package.update_package_index()
+            try:
+                package.update_package_index()
+            except Exception:
+                _progress("Index update failed (offline?), using cached...")
 
             available = package.get_available_packages()
 
