@@ -1,10 +1,18 @@
 """Matrix-styled Model Management Panel with Drag & Drop"""
 import customtkinter as ctk
+import re
 from tkinter import filedialog, messagebox
 from typing import Callable, Optional
 from pathlib import Path
 import threading
 import os
+
+from ..utils.logger import get_logger
+log = get_logger("model_manager")
+
+
+def _validate_model_name(name: str) -> bool:
+    return bool(re.match(r'^[a-zA-Z0-9][a-zA-Z0-9_:.\-]*$', name)) and len(name) <= 100
 
 # Optional drag and drop support
 try:
@@ -183,7 +191,12 @@ class DropZone(ctk.CTkFrame):
         """Set selected file"""
         self.selected_file = file_path
         filename = Path(file_path).name
-        size_gb = Path(file_path).stat().st_size / (1024**3)
+        try:
+            size_gb = Path(file_path).stat().st_size / (1024**3)
+        except (OSError, FileNotFoundError) as exc:
+            log.error("Cannot read file %s: %s", file_path, exc)
+            messagebox.showerror("Error", f"Cannot read file: {exc}")
+            return
 
         self.icon_label.configure(text=DECORATIONS["check"], text_color=COLORS["success"])
         self.main_label.configure(text="ARCHIVO CARGADO")
@@ -793,11 +806,10 @@ class ModelManagerPanel(ctk.CTkFrame):
             return
 
         # Sanitize name for Ollama compatibility
-        import re
         name = re.sub(r'[^a-z0-9-]', '-', name.lower())
         name = re.sub(r'-{2,}', '-', name).strip('-')
-        if not name:
-            messagebox.showerror("Error", "Nombre de modelo invalido")
+        if not name or not _validate_model_name(name):
+            messagebox.showerror("Error", "Nombre de modelo invalido. Solo letras, numeros, guiones, puntos, dos puntos y guion bajo.")
             return
         # Update the entry to show the sanitized name
         self.name_entry.delete(0, "end")
@@ -915,6 +927,9 @@ class ModelManagerPanel(ctk.CTkFrame):
 
     def _delete_model(self, name: str):
         """Delete a model"""
+        if not _validate_model_name(name):
+            messagebox.showerror("Error", "Nombre de modelo invalido.")
+            return
         if messagebox.askyesno("Confirmar", f"Eliminar modelo '{name}'?"):
             def do_delete():
                 self.ollama.delete_model(name)

@@ -5,5 +5,6 @@ from .helpers import (
     safe_filename,
     run_async
 )
+from .logger import get_logger
 
-__all__ = ["expand_path", "format_size", "safe_filename", "run_async"]
+__all__ = ["expand_path", "format_size", "safe_filename", "run_async", "get_logger"]

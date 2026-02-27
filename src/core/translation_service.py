@@ -2,6 +2,9 @@
 import threading
 from typing import Optional, Callable
 
+from ..utils.logger import get_logger
+log = get_logger("translation_service")
+
 
 class TranslationService:
     """Singleton service wrapping Argos Translate for offline ES<->EN translation.
@@ -93,7 +96,8 @@ class TranslationService:
                 _progress("Updating Argos Translate package index...")
                 try:
                     package.update_package_index()
-                except Exception:
+                except Exception as exc:
+                    log.warning("Index update failed (offline?): %s", exc)
                     _progress("Index update failed (offline?), using cached...")
 
                 available = package.get_available_packages()
@@ -130,7 +134,8 @@ class TranslationService:
                 if src is not None and dst is not None:
                     translation = src.get_translation(dst)
                     if translation is not None:
-                        self._installed_pairs[(from_code, to_code)] = translation
+                        with self._lock:
+                            self._installed_pairs[(from_code, to_code)] = translation
 
             self._ready = True
             _progress("Translation service ready")
@@ -138,6 +143,7 @@ class TranslationService:
                 on_complete(True)
 
         except Exception as exc:
+            log.error("Translation initialization failed: %s", exc)
             if on_progress is not None:
                 on_progress(f"Translation init error: {exc}")
             if on_complete is not None:
@@ -157,7 +163,8 @@ class TranslationService:
             return text
 
         try:
-            translation = self._installed_pairs.get((from_lang, to_lang))
+            with self._lock:
+                translation = self._installed_pairs.get((from_lang, to_lang))
             if translation is not None:
                 return translation.translate(text)
 
@@ -171,11 +178,13 @@ class TranslationService:
             if src is not None and dst is not None:
                 tr = src.get_translation(dst)
                 if tr is not None:
-                    self._installed_pairs[(from_lang, to_lang)] = tr
+                    with self._lock:
+                        self._installed_pairs[(from_lang, to_lang)] = tr
                     return tr.translate(text)
 
             return text
-        except Exception:
+        except Exception as exc:
+            log.warning("Translation failed for %s->%s: %s", from_lang, to_lang, exc)
             return text
 
     def is_ready(self) -> bool:

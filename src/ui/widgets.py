@@ -5,6 +5,9 @@ import time
 import threading
 
 from .theme import COLORS, FONTS, DECORATIONS, BUTTON_STYLE, BUTTON_PRIMARY_STYLE, ENTRY_STYLE, RADIUS
+from ..utils.logger import get_logger
+
+log = get_logger("widgets")
 
 
 class MatrixButton(ctk.CTkButton):
@@ -150,9 +153,14 @@ class MatrixScrollableFrame(ctk.CTkScrollableFrame):
 
         super().__init__(parent, **kwargs)
 
-        # Bind mousewheel for Linux (Button-4=up, Button-5=down) and Windows/Mac
-        self._bind_mousewheel_recursive(self)
-        self.bind("<Configure>", lambda e: self._bind_mousewheel_recursive(self), add="+")
+        # Bind mousewheel ONCE on the canvas only — no recursive child binding,
+        # no <Configure> re-binding.  This avoids the previous memory leak where
+        # duplicate handlers accumulated on every resize event.
+        canvas = self._parent_canvas
+        canvas.bind("<Button-4>", self._on_mousewheel, add="+")   # Linux scroll up
+        canvas.bind("<Button-5>", self._on_mousewheel, add="+")   # Linux scroll down
+        canvas.bind("<MouseWheel>", self._on_mousewheel, add="+") # Windows/Mac
+        log.debug("MatrixScrollableFrame: mousewheel bound once on canvas")
 
     def _on_mousewheel(self, event):
         """Handle mousewheel scroll across platforms"""
@@ -174,16 +182,6 @@ class MatrixScrollableFrame(ctk.CTkScrollableFrame):
                 canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
         except Exception:
             pass
-
-    def _bind_mousewheel_recursive(self, widget):
-        """Bind mousewheel events to widget and all its children"""
-        # Linux
-        widget.bind("<Button-4>", self._on_mousewheel, add="+")
-        widget.bind("<Button-5>", self._on_mousewheel, add="+")
-        # Windows/Mac
-        widget.bind("<MouseWheel>", self._on_mousewheel, add="+")
-        for child in widget.winfo_children():
-            self._bind_mousewheel_recursive(child)
 
 
 class MatrixComboBox(ctk.CTkComboBox):

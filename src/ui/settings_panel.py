@@ -1,9 +1,12 @@
 """Matrix-styled Settings Panel"""
 import customtkinter as ctk
-from tkinter import filedialog
+from tkinter import filedialog, messagebox
 from typing import Callable, Optional
 from pathlib import Path
 import json
+
+from ..utils.logger import get_logger
+log = get_logger("settings_panel")
 
 from .theme import COLORS, DECORATIONS, RADIUS
 from .widgets import (
@@ -61,7 +64,7 @@ class SettingsPanel(ctk.CTkFrame):
             if self.on_settings_changed:
                 self.on_settings_changed(self.settings)
         except Exception as e:
-            print(f"Error saving settings: {e}")
+            log.error("Error saving settings: %s", e)
 
     def _setup_ui(self):
         """Setup settings UI"""
@@ -368,10 +371,23 @@ v1.0.0 // Matrix Edition
 
     def _apply_settings(self):
         """Apply and save settings"""
+        # Validate numeric fields before saving
+        try:
+            timeout_val = int(self.timeout_entry.get())
+        except ValueError:
+            messagebox.showerror("Invalid value", "Timeout must be a valid integer.")
+            return
+
+        try:
+            font_size_val = int(self.font_combo.get())
+        except ValueError:
+            messagebox.showerror("Invalid value", "Font size must be a valid integer.")
+            return
+
         self.settings["ollama"]["host"] = self.host_entry.get()
-        self.settings["ollama"]["timeout"] = int(self.timeout_entry.get())
+        self.settings["ollama"]["timeout"] = timeout_val
         self.settings["ui"]["theme"] = self.theme_combo.get()
-        self.settings["ui"]["font_size"] = int(self.font_combo.get())
+        self.settings["ui"]["font_size"] = font_size_val
         self.settings["paths"]["models_dir"] = self.models_dir_entry.get()
 
         self.settings.setdefault("translation", {})

@@ -5,7 +5,11 @@ from typing import Optional
 from pathlib import Path
 import threading
 import random
+import re
 from PIL import Image, ImageTk
+
+from ..utils.logger import get_logger
+log = get_logger("main_window")
 
 from .widgets import (
     MatrixFrame, MatrixButton, MatrixLabel, MatrixComboBox,
@@ -98,17 +102,23 @@ class Sidebar(ctk.CTkFrame):
 
         self.on_nav = on_nav
         self.current_panel = "chat"
+        self._search_timer = None
 
         self._setup_ui()
 
     def _setup_ui(self):
         """Setup sidebar UI"""
-        self.grid_rowconfigure(4, weight=1)
+        self.grid_rowconfigure(5, weight=1)
         self.grid_columnconfigure(0, weight=1)
 
-        # ── ASCII Logo + Status ──
-        logo_frame = ctk.CTkFrame(self, fg_color=COLORS["bg_dark"], corner_radius=0)
-        logo_frame.grid(row=0, column=0, sticky="ew")
+        PAD_SIDE = 14
+
+        # ═══════════════════════════════════════
+        # LOGO + STATUS BLOCK
+        # ═══════════════════════════════════════
+        logo_block = ctk.CTkFrame(self, fg_color=COLORS["bg_dark"], corner_radius=0)
+        logo_block.grid(row=0, column=0, sticky="ew")
+        logo_block.grid_columnconfigure(0, weight=1)
 
         logo_text = """╔══════════════════════╗
 ║  ██████╗ ██████╗     ║
@@ -121,61 +131,49 @@ class Sidebar(ctk.CTkFrame):
 ╚══════════════════════╝"""
 
         ctk.CTkLabel(
-            logo_frame,
+            logo_block,
             text=logo_text,
             font=ctk.CTkFont(family="Consolas", size=9),
             text_color=COLORS["matrix_green"],
             justify="center",
-        ).pack(pady=(10, 4))
+        ).pack(pady=(14, 8))
 
-        # Status + GPU row below logo
-        status_row = ctk.CTkFrame(logo_frame, fg_color="transparent")
-        status_row.pack(fill="x", padx=12, pady=(0, 8))
-        status_row.grid_columnconfigure(1, weight=1)
+        # Status bar — compact card with indicator + GPU
+        status_bar = ctk.CTkFrame(
+            logo_block,
+            fg_color=COLORS["bg_secondary"],
+            corner_radius=RADIUS["md"],
+            border_width=1,
+            border_color=COLORS["border_dim"],
+        )
+        status_bar.pack(fill="x", padx=PAD_SIDE, pady=(0, 12))
+        status_bar.grid_columnconfigure(1, weight=1)
 
-        self.status_indicator = StatusIndicator(status_row)
-        self.status_indicator.grid(row=0, column=0, padx=(0, 8))
+        self.status_indicator = StatusIndicator(status_bar)
+        self.status_indicator.grid(row=0, column=0, padx=(10, 6), pady=6)
 
         self.gpu_label = ctk.CTkLabel(
-            status_row,
-            text=f"GPU: Detecting...",
+            status_bar,
+            text="GPU: Detecting...",
             font=ctk.CTkFont(family="Consolas", size=10),
             text_color=COLORS["text_muted"],
-            anchor="w",
+            anchor="e",
         )
-        self.gpu_label.grid(row=0, column=1, sticky="w")
+        self.gpu_label.grid(row=0, column=1, sticky="e", padx=(0, 10), pady=6)
 
-        # ── Model Selector ──
-        model_frame = ctk.CTkFrame(self, fg_color="transparent")
-        model_frame.grid(row=1, column=0, sticky="ew", padx=10, pady=(8, 4))
-        model_frame.grid_columnconfigure(0, weight=1)
-
-        MatrixLabel(
-            model_frame,
-            text=f"{DECORATIONS['block']} MODELO",
-            size="xs",
-            bright=True,
-        ).grid(row=0, column=0, sticky="w", pady=(0, 4))
-
-        self.model_combo = MatrixComboBox(model_frame, values=["Loading..."])
-        self.model_combo.grid(row=1, column=0, sticky="ew")
-
-        refresh_btn = MatrixButton(
-            model_frame,
-            text=f"{DECORATIONS['block_med']} Refresh",
-            height=26,
-            command=lambda: self.on_nav("refresh_models"),
+        # ═══════════════════════════════════════
+        # NAV TABS — rounded container
+        # ═══════════════════════════════════════
+        nav_container = ctk.CTkFrame(
+            self,
+            fg_color=COLORS["bg_dark"],
+            corner_radius=RADIUS["lg"],
+            border_width=1,
+            border_color=COLORS["border_dim"],
         )
-        refresh_btn.grid(row=2, column=0, sticky="ew", pady=(4, 0))
-
-        # ── Horizontal Nav Tabs ──
-        nav_frame = ctk.CTkFrame(self, fg_color=COLORS["bg_dark"], corner_radius=0)
-        nav_frame.grid(row=2, column=0, sticky="ew", padx=0, pady=(8, 0))
-
-        nav_inner = ctk.CTkFrame(nav_frame, fg_color="transparent")
-        nav_inner.pack(fill="x", padx=6, pady=6)
+        nav_container.grid(row=1, column=0, sticky="ew", padx=PAD_SIDE - 2, pady=(6, 0))
         for i in range(5):
-            nav_inner.grid_columnconfigure(i, weight=1)
+            nav_container.grid_columnconfigure(i, weight=1)
 
         self.nav_buttons = {}
         nav_items = [
@@ -189,25 +187,65 @@ class Sidebar(ctk.CTkFrame):
         for idx, (name, icon, label) in enumerate(nav_items):
             is_active = (name == "chat")
             btn = MatrixIconButton(
-                nav_inner,
+                nav_container,
                 icon=icon,
                 label=label,
                 active=is_active,
                 command=lambda n=name: self._on_nav_click(n),
             )
-            btn.grid(row=0, column=idx, padx=2, sticky="ew")
+            btn.grid(row=0, column=idx, padx=3, pady=4, sticky="ew")
             self.nav_buttons[name] = btn
 
-        # ── Separator ──
-        sep = ctk.CTkFrame(self, fg_color=COLORS["border_green"], height=1)
-        sep.grid(row=3, column=0, sticky="ew", padx=10, pady=6)
+        # ── Divider ──
+        ctk.CTkFrame(self, fg_color=COLORS["border_green"], height=1).grid(
+            row=2, column=0, sticky="ew", padx=PAD_SIDE + 6, pady=(10, 8),
+        )
 
-        # ── Chat List Section ──
+        # ═══════════════════════════════════════
+        # MODEL SELECTOR — card style
+        # ═══════════════════════════════════════
+        model_card = ctk.CTkFrame(
+            self,
+            fg_color=COLORS["bg_card"],
+            corner_radius=RADIUS["lg"],
+            border_width=1,
+            border_color=COLORS["border_dim"],
+        )
+        model_card.grid(row=3, column=0, sticky="ew", padx=PAD_SIDE)
+        model_card.grid_columnconfigure(0, weight=1)
+
+        MatrixLabel(
+            model_card,
+            text=f"{DECORATIONS['block']} MODEL",
+            size="xs",
+            bright=True,
+        ).grid(row=0, column=0, sticky="w", padx=12, pady=(10, 6))
+
+        self.model_combo = MatrixComboBox(model_card, values=["Loading..."])
+        self.model_combo.grid(row=1, column=0, sticky="ew", padx=12)
+
+        refresh_btn = MatrixButton(
+            model_card,
+            text=f"{DECORATIONS['block_med']} Refresh",
+            height=26,
+            command=lambda: self.on_nav("refresh_models"),
+        )
+        refresh_btn.grid(row=2, column=0, sticky="ew", padx=12, pady=(6, 10))
+
+        # ── Divider ──
+        ctk.CTkFrame(self, fg_color=COLORS["border_green"], height=1).grid(
+            row=4, column=0, sticky="ew", padx=PAD_SIDE + 6, pady=8,
+        )
+
+        # ═══════════════════════════════════════
+        # CHAT LIST SECTION
+        # ═══════════════════════════════════════
         chats_frame = ctk.CTkFrame(self, fg_color="transparent")
-        chats_frame.grid(row=4, column=0, sticky="nsew", padx=10, pady=(0, 10))
+        chats_frame.grid(row=5, column=0, sticky="nsew", padx=PAD_SIDE, pady=(0, 14))
         chats_frame.grid_rowconfigure(2, weight=1)
         chats_frame.grid_columnconfigure(0, weight=1)
 
+        # Header: label + NEW button
         chats_header = ctk.CTkFrame(chats_frame, fg_color="transparent")
         chats_header.grid(row=0, column=0, sticky="ew")
         chats_header.grid_columnconfigure(0, weight=1)
@@ -228,19 +266,22 @@ class Sidebar(ctk.CTkFrame):
         )
         new_chat_btn.grid(row=0, column=1, sticky="e")
 
+        # Search bar
         self.chat_search = MatrixEntry(
             chats_frame,
             placeholder_text="Search chats...",
             height=28,
         )
-        self.chat_search.grid(row=1, column=0, sticky="ew", pady=(6, 4))
-        self.chat_search.bind("<KeyRelease>", lambda e: self.on_nav("search_chats"))
+        self.chat_search.grid(row=1, column=0, sticky="ew", pady=(8, 6))
+        self.chat_search.bind("<KeyRelease>", lambda e: self._debounce_search())
 
+        # Scrollable chat list
         self.chat_list_frame = MatrixScrollableFrame(
             chats_frame,
             fg_color=COLORS["bg_dark"],
             border_width=1,
-            border_color=COLORS["border_green"],
+            border_color=COLORS["border_dim"],
+            corner_radius=RADIUS["md"],
         )
         self.chat_list_frame.grid(row=2, column=0, sticky="nsew")
         self.chat_list_frame.grid_columnconfigure(0, weight=1)
@@ -253,6 +294,11 @@ class Sidebar(ctk.CTkFrame):
             btn.set_active(name == panel_name)
 
         self.on_nav(panel_name)
+
+    def _debounce_search(self, delay_ms: int = 300):
+        if self._search_timer is not None:
+            self.after_cancel(self._search_timer)
+        self._search_timer = self.after(delay_ms, lambda: self.on_nav("search_chats"))
 
     def set_status(self, status: str, text: str = ""):
         """Update status indicator"""
@@ -412,6 +458,10 @@ class MainWindow(ctk.CTk):
         self.minsize(1200, 800)
         self.configure(fg_color=COLORS["bg_dark"])
 
+        self._geo_file = Path.home() / ".local" / "share" / "drago-model-runner" / "window.geo"
+        self._load_geometry()
+        self.bind("<Configure>", self._save_geometry_debounced)
+
         # Scale UI based on system DPI (96 = standard, 144 = 150%, 192 = 200%)
         dpi_scale = self._detect_system_scale()
         ctk.set_widget_scaling(dpi_scale)
@@ -494,6 +544,30 @@ class MainWindow(ctk.CTk):
 
         # Clamp to reasonable range
         return max(1.0, min(scale, 3.5))
+
+    def _load_geometry(self):
+        try:
+            if self._geo_file.exists():
+                geo = self._geo_file.read_text().strip()
+                if re.match(r'^\d+x\d+[+\-]\d+[+\-]\d+$', geo):
+                    self.geometry(geo)
+        except Exception:
+            log.warning("Could not load window geometry")
+
+    _geo_save_timer = None
+    def _save_geometry_debounced(self, event=None):
+        if event and event.widget is not self:
+            return
+        if self._geo_save_timer:
+            self.after_cancel(self._geo_save_timer)
+        self._geo_save_timer = self.after(1000, self._save_geometry)
+
+    def _save_geometry(self):
+        try:
+            self._geo_file.parent.mkdir(parents=True, exist_ok=True)
+            self._geo_file.write_text(self.geometry())
+        except Exception:
+            pass
 
     def _init_core(self):
         """Initialize core components"""
@@ -578,6 +652,16 @@ class MainWindow(ctk.CTk):
 
         # Show chat by default
         self._show_panel("chat")
+
+        # Keyboard shortcuts
+        self.bind("<Control-n>", lambda e: self._on_nav("new_chat"))
+        self.bind("<Control-l>", lambda e: self.chat_panel.clear_chat())
+        self.bind("<Control-e>", lambda e: self.chat_panel._export_chat())
+        self.bind("<Control-Key-1>", lambda e: (self.sidebar._on_nav_click("chat")))
+        self.bind("<Control-Key-2>", lambda e: (self.sidebar._on_nav_click("models")))
+        self.bind("<Control-Key-3>", lambda e: (self.sidebar._on_nav_click("system")))
+        self.bind("<Control-Key-4>", lambda e: (self.sidebar._on_nav_click("help")))
+        self.bind("<Control-Key-5>", lambda e: (self.sidebar._on_nav_click("settings")))
 
     def _startup_sequence(self):
         """Run startup sequence"""
@@ -897,7 +981,7 @@ class MainWindow(ctk.CTk):
             model = ""
         chat = self.chat_storage.new_chat(model=model)
         self.active_chat_id = chat["id"]
-        self.chat_panel.clear_chat()
+        self.chat_panel.clear_chat(_from_parent=True)
         self.chat_panel.set_current_chat(chat)
         self._refresh_chat_list()
 

@@ -1,10 +1,18 @@
 """Ollama API client wrapper"""
+import re
 import subprocess
 import json
 from typing import Optional, List, Generator, Callable
 from dataclasses import dataclass
 from pathlib import Path
 import threading
+
+from ..utils.logger import get_logger
+log = get_logger("ollama_client")
+
+
+def _validate_model_name(name: str) -> bool:
+    return bool(re.match(r'^[a-zA-Z0-9][a-zA-Z0-9_:.\-]*$', name)) and len(name) <= 100
 
 try:
     import ollama
@@ -114,7 +122,7 @@ class OllamaClient:
                             digest=digest
                         ))
         except Exception as e:
-            print(f"Error with ollama client: {e}")
+            log.error("Error with ollama client: %s", e)
 
         # Fallback to subprocess if no models found
         if not models:
@@ -137,7 +145,7 @@ class OllamaClient:
                                 digest=parts[1] if len(parts) > 1 else ""
                             ))
             except Exception as e:
-                print(f"Error listing models via subprocess: {e}")
+                log.error("Error listing models via subprocess: %s", e)
 
         return models
 
@@ -182,6 +190,8 @@ class OllamaClient:
         removed the 'modelfile' API parameter and the new 'from_' parameter
         only accepts model names, not filesystem paths to GGUF files.
         """
+        if not _validate_model_name(name):
+            raise ValueError(f"Invalid model name: {name!r}")
         try:
             process = subprocess.Popen(
                 ["ollama", "create", name, "-f", str(modelfile_path)],
@@ -202,11 +212,13 @@ class OllamaClient:
             process.wait(timeout=600)
             return process.returncode == 0
         except Exception as e:
-            print(f"Error creating model: {e}")
+            log.error("Error creating model: %s", e)
             return False
 
     def delete_model(self, name: str) -> bool:
         """Delete a model"""
+        if not _validate_model_name(name):
+            raise ValueError(f"Invalid model name: {name!r}")
         try:
             if self._client:
                 self._client.delete(name)
@@ -246,7 +258,7 @@ class OllamaClient:
                 )
                 return result.returncode == 0
         except Exception as e:
-            print(f"Error pulling model: {e}")
+            log.error("Error pulling model: %s", e)
             return False
 
     def chat(
