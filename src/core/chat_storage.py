@@ -36,13 +36,25 @@ class ChatStorage:
     # ── Cache helpers ─────────────────────────────────────────────
 
     def _build_cache(self) -> None:
-        """One-time scan of all JSON files to populate the metadata cache."""
+        """One-time scan of all JSON files to populate the metadata cache.
+
+        Corrupted files are quarantined (renamed .corrupt) so they don't
+        keep causing errors on every startup.
+        """
         with self._lock:
             for path in self.chats_dir.glob("*.json"):
                 try:
                     data = json.loads(path.read_text(encoding="utf-8"))
+                    if "id" not in data:
+                        raise ValueError("Missing 'id' field")
                     self._cache[data["id"]] = self._extract_meta(data)
-                except (json.JSONDecodeError, KeyError, OSError) as exc:
+                except (json.JSONDecodeError, ValueError) as exc:
+                    log.warning("Corrupted chat file %s: %s — quarantining", path.name, exc)
+                    try:
+                        path.rename(path.with_suffix(".json.corrupt"))
+                    except OSError:
+                        pass
+                except (KeyError, OSError) as exc:
                     log.warning("Failed to load chat file %s: %s", path.name, exc)
                     continue
 
@@ -69,8 +81,9 @@ class ChatStorage:
             "updated_at": datetime.now().isoformat(),
             "messages": [],
         }
-        self._write(chat)
-        self._cache[chat["id"]] = self._extract_meta(chat)
+        with self._lock:
+            self._write(chat)
+            self._cache[chat["id"]] = self._extract_meta(chat)
         return chat
 
     def save_chat(self, chat_data: dict) -> None:
@@ -91,15 +104,33 @@ class ChatStorage:
             self._cache[chat_data["id"]] = self._extract_meta(chat_data)
 
     def load_chat(self, chat_id: str) -> Optional[dict]:
-        """Load a chat by ID. Returns None if not found."""
+        """Load a chat by ID. Returns None if not found.
+
+        Handles corrupted files by renaming them with a .corrupt suffix
+        and removing them from the cache.
+        """
         with self._lock:
             path = self.chats_dir / f"{chat_id}.json"
             if not path.exists():
                 return None
             try:
-                return json.loads(path.read_text(encoding="utf-8"))
-            except (json.JSONDecodeError, OSError) as exc:
-                log.warning("Failed to load chat %s: %s", chat_id, exc)
+                data = json.loads(path.read_text(encoding="utf-8"))
+                # Validate minimal structure
+                if "id" not in data or "messages" not in data:
+                    raise ValueError("Missing required fields (id, messages)")
+                return data
+            except (json.JSONDecodeError, ValueError) as exc:
+                log.warning("Corrupted chat file %s: %s — quarantining", chat_id, exc)
+                # Quarantine the corrupted file
+                try:
+                    corrupt_path = path.with_suffix(".json.corrupt")
+                    path.rename(corrupt_path)
+                except OSError:
+                    pass
+                self._cache.pop(chat_id, None)
+                return None
+            except OSError as exc:
+                log.warning("Failed to read chat %s: %s", chat_id, exc)
                 return None
 
     def list_chats(self, limit: int = _MAX_LIST) -> list[dict]:
@@ -191,6 +222,23 @@ class ChatStorage:
         return "\n".join(lines)
 
     def _write(self, chat_data: dict) -> None:
-        """Write chat data to disk."""
+        """Write chat data to disk atomically.
+
+        Writes to a temp file first, then renames.  This prevents partial
+        writes from corrupting the file if the app crashes mid-save.
+        """
         path = self.chats_dir / f"{chat_data['id']}.json"
-        path.write_text(json.dumps(chat_data, indent=2, ensure_ascii=False), encoding="utf-8")
+        tmp_path = path.with_suffix(".json.tmp")
+        try:
+            tmp_path.write_text(
+                json.dumps(chat_data, indent=2, ensure_ascii=False),
+                encoding="utf-8"
+            )
+            tmp_path.replace(path)  # atomic on POSIX
+        except OSError as exc:
+            log.error("Failed to write chat %s: %s", chat_data.get("id"), exc)
+            # Clean up temp file if it exists
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except OSError:
+                pass

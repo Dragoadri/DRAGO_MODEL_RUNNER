@@ -4,6 +4,7 @@ from tkinter import filedialog, messagebox
 from typing import Callable, Optional
 from pathlib import Path
 import json
+import re
 
 from ..utils.logger import get_logger
 log = get_logger("settings_panel")
@@ -13,6 +14,19 @@ from .widgets import (
     MatrixFrame, MatrixButton, MatrixEntry, MatrixLabel,
     MatrixComboBox, TerminalHeader, MatrixScrollableFrame
 )
+
+DEFAULT_SETTINGS = {
+    "ollama": {"host": "http://localhost:11434", "timeout": 120, "auto_start": False},
+    "ui": {"theme": "dark", "font_size": 14},
+    "paths": {"models_dir": "~/ai-models"},
+    "chat": {"max_context_messages": 40},
+    "translation": {
+        "enabled": True,
+        "source_lang": "es",
+        "target_lang": "en",
+        "auto_translate_input": True
+    }
+}
 
 
 class SettingsPanel(ctk.CTkFrame):
@@ -37,34 +51,36 @@ class SettingsPanel(ctk.CTkFrame):
         self._setup_ui()
 
     def _load_settings(self) -> dict:
-        """Load settings from file"""
+        """Load settings from file, merging with defaults"""
+        defaults = json.loads(json.dumps(DEFAULT_SETTINGS))
         try:
             if self.config_path.exists():
-                return json.loads(self.config_path.read_text())
+                saved = json.loads(self.config_path.read_text())
+                # Deep merge saved over defaults
+                for section, values in saved.items():
+                    if section in defaults and isinstance(values, dict):
+                        defaults[section].update(values)
+                    else:
+                        defaults[section] = values
         except Exception:
             pass
-
-        return {
-            "ollama": {"host": "http://localhost:11434", "timeout": 120},
-            "ui": {"theme": "dark", "font_size": 14},
-            "paths": {"models_dir": "~/ai-models"},
-            "translation": {
-                "enabled": True,
-                "source_lang": "es",
-                "target_lang": "en",
-                "auto_translate_input": True
-            }
-        }
+        return defaults
 
     def _save_settings(self):
-        """Save settings to file"""
+        """Save settings to file atomically."""
         try:
             self.config_path.parent.mkdir(parents=True, exist_ok=True)
-            self.config_path.write_text(json.dumps(self.settings, indent=2))
+            tmp_path = self.config_path.with_suffix(".json.tmp")
+            tmp_path.write_text(json.dumps(self.settings, indent=2), encoding="utf-8")
+            tmp_path.replace(self.config_path)  # atomic on POSIX
             if self.on_settings_changed:
                 self.on_settings_changed(self.settings)
-        except Exception as e:
+        except OSError as e:
             log.error("Error saving settings: %s", e)
+            try:
+                self.config_path.with_suffix(".json.tmp").unlink(missing_ok=True)
+            except OSError:
+                pass
 
     def _setup_ui(self):
         """Setup settings UI"""
@@ -95,14 +111,51 @@ class SettingsPanel(ctk.CTkFrame):
         self.host_entry = MatrixEntry(ollama_grid, width=350)
         self.host_entry.insert(0, self.settings["ollama"]["host"])
         self.host_entry.grid(row=0, column=1, padx=10, pady=10, sticky="w")
+        self.host_entry.bind("<KeyRelease>", self._validate_host_live)
+
+        self.host_validation = ctk.CTkLabel(
+            ollama_grid,
+            text="",
+            font=ctk.CTkFont(family="Consolas", size=10),
+            text_color=COLORS["text_muted"],
+        )
+        self.host_validation.grid(row=1, column=1, padx=10, pady=(0, 5), sticky="w")
 
         # Timeout
         MatrixLabel(ollama_grid, text=f"{DECORATIONS['arrow_r']} Timeout (s):", size="sm").grid(
-            row=1, column=0, padx=15, pady=10, sticky="w"
+            row=2, column=0, padx=15, pady=10, sticky="w"
         )
         self.timeout_entry = MatrixEntry(ollama_grid, width=100)
         self.timeout_entry.insert(0, str(self.settings["ollama"]["timeout"]))
-        self.timeout_entry.grid(row=1, column=1, padx=10, pady=10, sticky="w")
+        self.timeout_entry.grid(row=2, column=1, padx=10, pady=10, sticky="w")
+
+        # Auto-start Ollama
+        MatrixLabel(ollama_grid, text=f"{DECORATIONS['arrow_r']} Auto-start:", size="sm").grid(
+            row=3, column=0, padx=15, pady=10, sticky="w"
+        )
+        auto_start_frame = ctk.CTkFrame(ollama_grid, fg_color="transparent")
+        auto_start_frame.grid(row=3, column=1, padx=10, pady=10, sticky="w")
+
+        self.auto_start_switch = ctk.CTkSwitch(
+            auto_start_frame,
+            text="",
+            width=40,
+            height=20,
+            fg_color=COLORS["bg_tertiary"],
+            progress_color=COLORS["matrix_green_dark"],
+            button_color=COLORS["matrix_green"],
+            button_hover_color=COLORS["matrix_green_bright"],
+        )
+        if self.settings["ollama"].get("auto_start", False):
+            self.auto_start_switch.select()
+        self.auto_start_switch.pack(side="left")
+
+        ctk.CTkLabel(
+            auto_start_frame,
+            text="  Iniciar Ollama automaticamente al abrir la app",
+            font=ctk.CTkFont(family="Consolas", size=10),
+            text_color=COLORS["text_muted"],
+        ).pack(side="left")
 
         # Test connection button
         test_btn = MatrixButton(
@@ -110,14 +163,41 @@ class SettingsPanel(ctk.CTkFrame):
             text=f"{DECORATIONS['block_med']} TEST CONNECTION",
             command=self._test_connection
         )
-        test_btn.grid(row=2, column=1, padx=10, pady=10, sticky="w")
+        test_btn.grid(row=4, column=1, padx=10, pady=10, sticky="w")
 
         self.connection_status = MatrixLabel(
             ollama_grid,
             text="",
             size="sm"
         )
-        self.connection_status.grid(row=2, column=0, padx=15, pady=10, sticky="w")
+        self.connection_status.grid(row=4, column=0, padx=15, pady=10, sticky="w")
+
+        # === CHAT SECTION ===
+        chat_section = self._create_section(content, "CHAT")
+        chat_section.pack(fill="x", pady=(0, 20))
+
+        chat_grid = MatrixFrame(chat_section)
+        chat_grid.pack(fill="x", padx=15, pady=15)
+        chat_grid.grid_columnconfigure(1, weight=1)
+
+        # Max context messages
+        MatrixLabel(chat_grid, text=f"{DECORATIONS['arrow_r']} Max context messages:", size="sm").grid(
+            row=0, column=0, padx=15, pady=10, sticky="w"
+        )
+        self.ctx_msgs_combo = MatrixComboBox(
+            chat_grid,
+            values=["10", "20", "40", "60", "80", "100"],
+            width=100
+        )
+        self.ctx_msgs_combo.set(str(self.settings.get("chat", {}).get("max_context_messages", 40)))
+        self.ctx_msgs_combo.grid(row=0, column=1, padx=10, pady=10, sticky="w")
+
+        ctk.CTkLabel(
+            chat_grid,
+            text="Mensajes enviados al modelo (ventana deslizante). Mas = mas contexto, mas lento.",
+            font=ctk.CTkFont(family="Consolas", size=10),
+            text_color=COLORS["text_muted"],
+        ).grid(row=1, column=1, padx=10, pady=(0, 8), sticky="w")
 
         # === UI SECTION ===
         ui_section = self._create_section(content, "INTERFACE")
@@ -250,13 +330,15 @@ class SettingsPanel(ctk.CTkFrame):
         about_section.pack(fill="x", pady=(0, 20))
 
         about_text = f"""
-{DECORATIONS['block']} DRAGO MODEL RUNNER v1.0
+{DECORATIONS['block']} DRAGO MODEL RUNNER v1.0.0
 {DECORATIONS['h_line'] * 35}
 
 Local LLM inference interface powered by Ollama.
 Designed for running uncensored models locally.
 
-{DECORATIONS['arrow_r']} GitHub: github.com/drago/model-runner
+{DECORATIONS['arrow_r']} Backend: Ollama (local inference)
+{DECORATIONS['arrow_r']} Frontend: CustomTkinter (Python)
+{DECORATIONS['arrow_r']} Translation: Argos Translate (offline)
 {DECORATIONS['arrow_r']} License: MIT
 
 {DECORATIONS['h_line'] * 35}
@@ -282,21 +364,47 @@ v1.0.0 // Matrix Edition
 
         about_section.bind("<Configure>", _update_about_wrap, add="+")
 
-        # === SAVE BUTTON ===
-        save_frame = ctk.CTkFrame(content, fg_color="transparent")
-        save_frame.pack(fill="x", pady=20)
+        # === ACTION BUTTONS ===
+        actions_frame = ctk.CTkFrame(content, fg_color="transparent")
+        actions_frame.pack(fill="x", pady=20)
 
+        # Save button
         self.save_btn = MatrixButton(
-            save_frame,
+            actions_frame,
             text=f"{DECORATIONS['check']} SAVE CONFIGURATION",
             height=45,
             primary=True,
             command=self._apply_settings
         )
-        self.save_btn.pack(pady=10)
+        self.save_btn.pack(pady=(0, 10))
 
-        self.status_label = MatrixLabel(save_frame, text="", size="sm")
-        self.status_label.pack()
+        self.status_label = MatrixLabel(actions_frame, text="", size="sm")
+        self.status_label.pack(pady=(0, 10))
+
+        # Secondary action buttons row
+        btn_row = ctk.CTkFrame(actions_frame, fg_color="transparent")
+        btn_row.pack()
+
+        MatrixButton(
+            btn_row,
+            text=f"{DECORATIONS['arrow_r']} RESET TO DEFAULTS",
+            height=32,
+            command=self._reset_to_defaults
+        ).pack(side="left", padx=5)
+
+        MatrixButton(
+            btn_row,
+            text=f"{DECORATIONS['arrow_r']} EXPORT",
+            height=32,
+            command=self._export_settings
+        ).pack(side="left", padx=5)
+
+        MatrixButton(
+            btn_row,
+            text=f"{DECORATIONS['arrow_r']} IMPORT",
+            height=32,
+            command=self._import_settings
+        ).pack(side="left", padx=5)
 
     def _create_section(self, parent, title: str) -> ctk.CTkFrame:
         """Create a styled section"""
@@ -320,8 +428,48 @@ v1.0.0 // Matrix Edition
 
         return section
 
+    def _validate_host_live(self, event=None):
+        """Validate Ollama host URL inline"""
+        host = self.host_entry.get().strip()
+        if not host:
+            self.host_validation.configure(
+                text=f"{DECORATIONS['cross']} URL requerida",
+                text_color=COLORS["error"]
+            )
+            return
+
+        # Check URL format
+        url_pattern = re.compile(
+            r'^https?://'
+            r'[a-zA-Z0-9._-]+'
+            r'(:\d{1,5})?'
+            r'/?$'
+        )
+        if not url_pattern.match(host):
+            self.host_validation.configure(
+                text=f"{DECORATIONS['cross']} Formato invalido. Ej: http://localhost:11434",
+                text_color=COLORS["error"]
+            )
+            return
+
+        # Check port range if present
+        port_match = re.search(r':(\d+)', host.split('//')[1] if '//' in host else host)
+        if port_match:
+            port = int(port_match.group(1))
+            if port < 1 or port > 65535:
+                self.host_validation.configure(
+                    text=f"{DECORATIONS['cross']} Puerto invalido (1-65535)",
+                    text_color=COLORS["error"]
+                )
+                return
+
+        self.host_validation.configure(
+            text=f"{DECORATIONS['check']} URL valida",
+            text_color=COLORS["success"]
+        )
+
     def _on_theme_change(self, theme: str):
-        """Handle theme change"""
+        """Handle theme change -- apply live preview"""
         ctk.set_appearance_mode(theme)
 
     def _browse_models_dir(self):
@@ -344,8 +492,8 @@ v1.0.0 // Matrix Edition
         )
 
         def test():
-            import httpx
             try:
+                import httpx
                 host = self.host_entry.get()
                 with httpx.Client(timeout=5) as client:
                     response = client.get(f"{host}/api/tags")
@@ -384,11 +532,26 @@ v1.0.0 // Matrix Edition
             messagebox.showerror("Invalid value", "Font size must be a valid integer.")
             return
 
-        self.settings["ollama"]["host"] = self.host_entry.get()
+        try:
+            ctx_msgs_val = int(self.ctx_msgs_combo.get())
+        except ValueError:
+            ctx_msgs_val = 40
+
+        # Validate host URL
+        host = self.host_entry.get().strip()
+        if not host or not re.match(r'^https?://.+', host):
+            messagebox.showerror("Invalid value", "Ollama host must be a valid URL (http://...)")
+            return
+
+        self.settings["ollama"]["host"] = host
         self.settings["ollama"]["timeout"] = timeout_val
+        self.settings["ollama"]["auto_start"] = self.auto_start_switch.get() == 1
         self.settings["ui"]["theme"] = self.theme_combo.get()
         self.settings["ui"]["font_size"] = font_size_val
         self.settings["paths"]["models_dir"] = self.models_dir_entry.get()
+
+        self.settings.setdefault("chat", {})
+        self.settings["chat"]["max_context_messages"] = ctx_msgs_val
 
         self.settings.setdefault("translation", {})
         self.settings["translation"]["enabled"] = self.trans_enabled_switch.get() == 1
@@ -403,6 +566,128 @@ v1.0.0 // Matrix Edition
             text_color=COLORS["success"]
         )
         self.after(3000, lambda: self.status_label.configure(text=""))
+
+    def _reset_to_defaults(self):
+        """Reset all settings to defaults"""
+        if not messagebox.askyesno(
+            "Reset Settings",
+            "Restaurar todos los ajustes a los valores por defecto?\n\n"
+            "Esto no se puede deshacer."
+        ):
+            return
+
+        self.settings = json.loads(json.dumps(DEFAULT_SETTINGS))
+
+        # Update UI fields
+        self.host_entry.delete(0, "end")
+        self.host_entry.insert(0, self.settings["ollama"]["host"])
+        self.timeout_entry.delete(0, "end")
+        self.timeout_entry.insert(0, str(self.settings["ollama"]["timeout"]))
+        self.auto_start_switch.deselect()
+        self.theme_combo.set(self.settings["ui"]["theme"])
+        self.font_combo.set(str(self.settings["ui"]["font_size"]))
+        self.models_dir_entry.delete(0, "end")
+        self.models_dir_entry.insert(0, self.settings["paths"]["models_dir"])
+        self.ctx_msgs_combo.set(str(self.settings["chat"]["max_context_messages"]))
+        self.trans_enabled_switch.select()
+        self.source_lang_combo.set(self.settings["translation"]["source_lang"])
+        self.target_lang_combo.set(self.settings["translation"]["target_lang"])
+        self.auto_translate_switch.select()
+        self.host_validation.configure(text="")
+        self.connection_status.configure(text="")
+
+        self._save_settings()
+
+        self.status_label.configure(
+            text=f"{DECORATIONS['check']} Reset to defaults",
+            text_color=COLORS["success"]
+        )
+        self.after(3000, lambda: self.status_label.configure(text=""))
+
+    def _export_settings(self):
+        """Export settings to a JSON file"""
+        path = filedialog.asksaveasfilename(
+            title="Export Settings",
+            defaultextension=".json",
+            filetypes=[("JSON files", "*.json"), ("All files", "*.*")],
+            initialfile="drago_settings.json",
+        )
+        if not path:
+            return
+
+        try:
+            Path(path).write_text(json.dumps(self.settings, indent=2))
+            self.status_label.configure(
+                text=f"{DECORATIONS['check']} Exported to {Path(path).name}",
+                text_color=COLORS["success"]
+            )
+            self.after(3000, lambda: self.status_label.configure(text=""))
+        except Exception as e:
+            messagebox.showerror("Export Error", f"Failed to export: {e}")
+
+    def _import_settings(self):
+        """Import settings from a JSON file"""
+        path = filedialog.askopenfilename(
+            title="Import Settings",
+            filetypes=[("JSON files", "*.json"), ("All files", "*.*")],
+        )
+        if not path:
+            return
+
+        try:
+            imported = json.loads(Path(path).read_text())
+            if not isinstance(imported, dict):
+                messagebox.showerror("Import Error", "Invalid settings file format.")
+                return
+
+            if not messagebox.askyesno(
+                "Import Settings",
+                f"Importar ajustes desde {Path(path).name}?\n\n"
+                "Los ajustes actuales seran reemplazados."
+            ):
+                return
+
+            self.settings = imported
+
+            # Refresh UI from imported settings
+            self.host_entry.delete(0, "end")
+            self.host_entry.insert(0, self.settings.get("ollama", {}).get("host", "http://localhost:11434"))
+            self.timeout_entry.delete(0, "end")
+            self.timeout_entry.insert(0, str(self.settings.get("ollama", {}).get("timeout", 120)))
+            if self.settings.get("ollama", {}).get("auto_start", False):
+                self.auto_start_switch.select()
+            else:
+                self.auto_start_switch.deselect()
+            self.theme_combo.set(self.settings.get("ui", {}).get("theme", "dark"))
+            self.font_combo.set(str(self.settings.get("ui", {}).get("font_size", 14)))
+            self.models_dir_entry.delete(0, "end")
+            self.models_dir_entry.insert(0, self.settings.get("paths", {}).get("models_dir", "~/ai-models"))
+            self.ctx_msgs_combo.set(str(self.settings.get("chat", {}).get("max_context_messages", 40)))
+
+            trans = self.settings.get("translation", {})
+            if trans.get("enabled", True):
+                self.trans_enabled_switch.select()
+            else:
+                self.trans_enabled_switch.deselect()
+            self.source_lang_combo.set(trans.get("source_lang", "es"))
+            self.target_lang_combo.set(trans.get("target_lang", "en"))
+            if trans.get("auto_translate_input", True):
+                self.auto_translate_switch.select()
+            else:
+                self.auto_translate_switch.deselect()
+
+            self._save_settings()
+
+            self.status_label.configure(
+                text=f"{DECORATIONS['check']} Imported from {Path(path).name}",
+                text_color=COLORS["success"]
+            )
+            self.after(3000, lambda: self.status_label.configure(text=""))
+
+        except json.JSONDecodeError:
+            messagebox.showerror("Import Error", "File is not valid JSON.")
+        except Exception as e:
+            messagebox.showerror("Import Error", f"Failed to import: {e}")
 
     def get_settings(self) -> dict:
         """Get current settings"""

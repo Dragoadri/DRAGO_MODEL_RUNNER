@@ -39,6 +39,10 @@ COLORS = {
     "border_bright": "#00ff41",
     "border_dim": "#1a3a1a",
 
+    # Code blocks
+    "bg_code": "#0c1a0c",
+    "border_code": "#1a3a1a",
+
     # Focus/Active states
     "bg_focus": "#0a1f0a",
     "border_focus": "#00ff41",

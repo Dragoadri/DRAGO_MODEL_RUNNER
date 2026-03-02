@@ -4,7 +4,8 @@ from .widgets import (
     MatrixButton, MatrixEntry, MatrixTextbox, MatrixLabel,
     MatrixFrame, MatrixScrollableFrame, MatrixComboBox,
     MatrixSlider, MatrixProgressBar, TerminalHeader,
-    StatusIndicator, GlowingTitle, TypewriterLabel
+    StatusIndicator, GlowingTitle, TypewriterLabel,
+    MatrixTooltip, LoadingSpinner
 )
 from .main_window import MainWindow
 from .chat_panel import ChatPanel
@@ -19,6 +20,7 @@ __all__ = [
     "MatrixFrame", "MatrixScrollableFrame", "MatrixComboBox",
     "MatrixSlider", "MatrixProgressBar", "TerminalHeader",
     "StatusIndicator", "GlowingTitle", "TypewriterLabel",
+    "MatrixTooltip", "LoadingSpinner",
     "MainWindow", "ChatPanel", "ModelManagerPanel", "SettingsPanel",
     "HelpPanel", "SystemPanel"
 ]

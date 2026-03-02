@@ -141,7 +141,17 @@ class MatrixFrame(ctk.CTkFrame):
 
 
 class MatrixScrollableFrame(ctk.CTkScrollableFrame):
-    """Matrix-styled scrollable frame with Linux mousewheel support"""
+    """Matrix-styled scrollable frame with cross-platform mousewheel support.
+
+    Fixes the common CTkScrollableFrame issue where scrolling only works when
+    the mouse hovers directly over the canvas background.  Child widgets
+    (labels, buttons, frames, etc.) capture mouse events and the canvas never
+    receives them.
+
+    Solution: recursively bind mousewheel events on every child widget so they
+    redirect scrolling to the parent canvas.  New children added dynamically
+    are picked up via the <Map> event.
+    """
 
     def __init__(self, parent, **kwargs):
         kwargs.setdefault("fg_color", COLORS["bg_secondary"])
@@ -153,35 +163,98 @@ class MatrixScrollableFrame(ctk.CTkScrollableFrame):
 
         super().__init__(parent, **kwargs)
 
-        # Bind mousewheel ONCE on the canvas only — no recursive child binding,
-        # no <Configure> re-binding.  This avoids the previous memory leak where
-        # duplicate handlers accumulated on every resize event.
+        self._bound_widgets: set = set()  # widget ids already bound
+
+        # Bind on the canvas itself
         canvas = self._parent_canvas
-        canvas.bind("<Button-4>", self._on_mousewheel, add="+")   # Linux scroll up
-        canvas.bind("<Button-5>", self._on_mousewheel, add="+")   # Linux scroll down
-        canvas.bind("<MouseWheel>", self._on_mousewheel, add="+") # Windows/Mac
-        log.debug("MatrixScrollableFrame: mousewheel bound once on canvas")
+        canvas.bind("<Button-4>", self._on_mousewheel, add="+")
+        canvas.bind("<Button-5>", self._on_mousewheel, add="+")
+        canvas.bind("<MouseWheel>", self._on_mousewheel, add="+")
+        self._bound_widgets.add(id(canvas))
+
+        # Bind on the inner frame that CTkScrollableFrame uses
+        self._bind_mousewheel(self)
+
+        # Re-bind children when the scroll region changes (new widgets added).
+        # Throttled to avoid performance issues on rapid updates.
+        self._rebind_timer = None
+        canvas.bind("<Configure>", self._schedule_rebind, add="+")
+
+        # Do an initial sweep after the frame is fully constructed
+        self.after(100, self._bind_all_children)
+
+    # ── Mousewheel handler ──────────────────────────────────────────
 
     def _on_mousewheel(self, event):
-        """Handle mousewheel scroll across platforms"""
+        """Handle mousewheel scroll across platforms."""
         try:
             canvas = self._parent_canvas
-            # Check if content is taller than visible area
-            if canvas.bbox("all") is None:
-                return
-            content_height = canvas.bbox("all")[3]
+            bbox = canvas.bbox("all")
+            if bbox is None:
+                return "break"
+            content_height = bbox[3]
             visible_height = canvas.winfo_height()
             if content_height <= visible_height:
-                return
+                return "break"
 
-            if event.num == 4:  # Linux scroll up
+            if event.num == 4:          # Linux scroll up
                 canvas.yview_scroll(-3, "units")
-            elif event.num == 5:  # Linux scroll down
+            elif event.num == 5:        # Linux scroll down
                 canvas.yview_scroll(3, "units")
-            elif hasattr(event, 'delta'):  # Windows/Mac
-                canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+            elif hasattr(event, 'delta'):
+                if event.delta != 0:    # Windows / macOS
+                    canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
         except Exception:
             pass
+        return "break"
+
+    # ── Recursive binding ───────────────────────────────────────────
+
+    def _bind_mousewheel(self, widget):
+        """Bind mousewheel events on *widget* if not already bound."""
+        wid = id(widget)
+        if wid in self._bound_widgets:
+            return
+        self._bound_widgets.add(wid)
+        try:
+            widget.bind("<Button-4>", self._on_mousewheel, add="+")
+            widget.bind("<Button-5>", self._on_mousewheel, add="+")
+            widget.bind("<MouseWheel>", self._on_mousewheel, add="+")
+        except Exception:
+            pass
+
+    def _bind_all_children(self):
+        """Walk the entire widget tree and bind every descendant."""
+        self._walk_and_bind(self)
+
+    def _walk_and_bind(self, widget):
+        """Recursively bind *widget* and all its children."""
+        self._bind_mousewheel(widget)
+        try:
+            for child in widget.winfo_children():
+                self._walk_and_bind(child)
+        except Exception:
+            pass
+
+    def _schedule_rebind(self, event=None):
+        """Schedule a deferred re-bind of all children.
+
+        Throttled to max once every 200ms so rapid widget additions
+        (e.g. streaming chat tokens) don't cause excessive tree walks.
+        """
+        if self._rebind_timer is not None:
+            return  # already scheduled
+        self._rebind_timer = self.after(200, self._do_rebind)
+
+    def _do_rebind(self):
+        """Execute the deferred re-bind."""
+        self._rebind_timer = None
+        self._bind_all_children()
+
+    def destroy(self):
+        """Clean up bound-widget tracking on destroy."""
+        self._bound_widgets.clear()
+        super().destroy()
 
 
 class MatrixComboBox(ctk.CTkComboBox):
@@ -419,3 +492,145 @@ class TypewriterLabel(ctk.CTkLabel):
             self.after(self.speed, self._type_next)
         else:
             self.configure(text=self.full_text)
+
+
+class MatrixTooltip:
+    """Matrix-styled tooltip that appears on hover.
+
+    Usage:
+        btn = MatrixButton(parent, text="X")
+        MatrixTooltip(btn, "Close window")
+    """
+
+    def __init__(self, widget, text: str, delay: int = 500):
+        self.widget = widget
+        self.text = text
+        self.delay = delay
+        self._tip_window = None
+        self._after_id = None
+
+        widget.bind("<Enter>", self._schedule_show, add="+")
+        widget.bind("<Leave>", self._hide, add="+")
+        widget.bind("<ButtonPress>", self._hide, add="+")
+
+    def _schedule_show(self, event=None):
+        self._cancel()
+        self._after_id = self.widget.after(self.delay, self._show)
+
+    def _cancel(self):
+        if self._after_id:
+            self.widget.after_cancel(self._after_id)
+            self._after_id = None
+
+    def _show(self):
+        if self._tip_window:
+            return
+        try:
+            x = self.widget.winfo_rootx() + self.widget.winfo_width() // 2
+            y = self.widget.winfo_rooty() + self.widget.winfo_height() + 4
+        except Exception:
+            return
+
+        self._tip_window = tw = ctk.CTkToplevel(self.widget)
+        tw.withdraw()
+        tw.overrideredirect(True)
+
+        # Tooltip frame
+        frame = ctk.CTkFrame(
+            tw,
+            fg_color=COLORS["bg_tertiary"],
+            border_color=COLORS["matrix_green_dim"],
+            border_width=1,
+            corner_radius=4,
+        )
+        frame.pack()
+
+        label = ctk.CTkLabel(
+            frame,
+            text=self.text,
+            font=ctk.CTkFont(family="Consolas", size=11),
+            text_color=COLORS["matrix_green"],
+        )
+        label.pack(padx=8, pady=4)
+
+        tw.update_idletasks()
+        tw_width = tw.winfo_reqwidth()
+        tw.geometry(f"+{x - tw_width // 2}+{y}")
+        tw.deiconify()
+
+    def _hide(self, event=None):
+        self._cancel()
+        if self._tip_window:
+            self._tip_window.destroy()
+            self._tip_window = None
+
+    def update_text(self, text: str):
+        """Update tooltip text."""
+        self.text = text
+
+
+class LoadingSpinner(ctk.CTkFrame):
+    """Animated loading spinner with optional text.
+
+    Usage:
+        spinner = LoadingSpinner(parent, text="Loading models...")
+        spinner.pack()
+        # When done:
+        spinner.stop()
+        spinner.destroy()
+    """
+
+    def __init__(self, parent, text: str = "Loading...", **kwargs):
+        kwargs.setdefault("fg_color", "transparent")
+        super().__init__(parent, **kwargs)
+
+        self._running = True
+        self._idx = 0
+        self._frames = [
+            DECORATIONS["block_light"],
+            DECORATIONS["block_med"],
+            DECORATIONS["block_dark"],
+            DECORATIONS["block"],
+            DECORATIONS["block_dark"],
+            DECORATIONS["block_med"],
+        ]
+
+        self._spinner = ctk.CTkLabel(
+            self,
+            text=self._frames[0],
+            font=ctk.CTkFont(family="Consolas", size=16),
+            text_color=COLORS["matrix_green"],
+            width=24,
+        )
+        self._spinner.pack(side="left", padx=(0, 8))
+
+        self._label = ctk.CTkLabel(
+            self,
+            text=text,
+            font=ctk.CTkFont(family="Consolas", size=13),
+            text_color=COLORS["text_muted"],
+        )
+        self._label.pack(side="left")
+
+        self._animate()
+
+    def _animate(self):
+        if not self._running:
+            return
+        try:
+            if not self.winfo_exists():
+                return
+        except Exception:
+            return
+
+        self._spinner.configure(text=self._frames[self._idx % len(self._frames)])
+        self._idx += 1
+        self.after(120, self._animate)
+
+    def stop(self):
+        """Stop the animation."""
+        self._running = False
+
+    def set_text(self, text: str):
+        """Update the loading text."""
+        self._label.configure(text=text)

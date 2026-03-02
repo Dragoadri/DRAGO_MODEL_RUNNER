@@ -1,8 +1,12 @@
 """GGUF file discovery and management"""
-import os
+import re
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Tuple
 from dataclasses import dataclass
+
+from ..utils.logger import get_logger
+from ..utils.helpers import format_size
+log = get_logger("gguf_manager")
 
 
 @dataclass
@@ -15,17 +19,76 @@ class GGUFFile:
     @property
     def size_human(self) -> str:
         """Human-readable file size"""
-        size = self.size_bytes
-        for unit in ["B", "KB", "MB", "GB"]:
-            if size < 1024:
-                return f"{size:.1f} {unit}"
-            size /= 1024
-        return f"{size:.1f} TB"
+        return format_size(self.size_bytes)
 
     @property
     def display_name(self) -> str:
         """Name without extension for display"""
         return self.path.stem
+
+    @property
+    def quantization(self) -> str:
+        """Extract quantization level from filename (e.g. Q4_K_M, Q3_K_S)"""
+        m = re.search(r'[_-](Q\d+[_-]?K?[_-]?[A-Z]?)', self.name, re.IGNORECASE)
+        if m:
+            return m.group(1).upper().replace('-', '_')
+        # Check for fp16/fp32
+        if re.search(r'fp16', self.name, re.IGNORECASE):
+            return "FP16"
+        if re.search(r'fp32', self.name, re.IGNORECASE):
+            return "FP32"
+        return ""
+
+    @property
+    def is_split(self) -> bool:
+        """Check if this is a split/sharded GGUF file"""
+        return bool(re.search(r'\d{5}-of-\d{5}', self.name))
+
+    @property
+    def split_info(self) -> Optional[Tuple[int, int]]:
+        """Return (part_number, total_parts) if this is a split file, else None"""
+        m = re.search(r'(\d{5})-of-(\d{5})', self.name)
+        if m:
+            return (int(m.group(1)), int(m.group(2)))
+        return None
+
+
+def detect_split_gguf(file_path: str) -> Optional[dict]:
+    """Detect if a file is part of a split GGUF set.
+
+    Returns a dict with split info if the file is split, None otherwise.
+    Dict keys: part, total, found_parts, missing_parts, all_complete
+    """
+    path = Path(file_path)
+    m = re.search(r'(\d{5})-of-(\d{5})', path.name)
+    if not m:
+        return None
+
+    part_num = int(m.group(1))
+    total_parts = int(m.group(2))
+
+    # Build the expected pattern to find sibling parts
+    prefix = path.name[:m.start()]
+    suffix = path.name[m.end():]
+    parent = path.parent
+
+    found_parts = []
+    missing_parts = []
+    for i in range(1, total_parts + 1):
+        expected_name = f"{prefix}{i:05d}-of-{total_parts:05d}{suffix}"
+        expected_path = parent / expected_name
+        if expected_path.exists():
+            found_parts.append(i)
+        else:
+            missing_parts.append(i)
+
+    return {
+        "part": part_num,
+        "total": total_parts,
+        "found_parts": found_parts,
+        "missing_parts": missing_parts,
+        "all_complete": len(missing_parts) == 0,
+    }
 
 
 class GGUFManager:
@@ -66,17 +129,22 @@ class GGUFManager:
 
         pattern = "**/*" if recursive else "*"
 
-        for ext in self.EXTENSIONS:
-            for file_path in directory.glob(f"{pattern}{ext}"):
-                if file_path.is_file():
-                    try:
-                        files.append(GGUFFile(
-                            path=file_path,
-                            name=file_path.name,
-                            size_bytes=file_path.stat().st_size
-                        ))
-                    except (OSError, PermissionError):
-                        continue
+        try:
+            for ext in self.EXTENSIONS:
+                for file_path in directory.glob(f"{pattern}{ext}"):
+                    if file_path.is_file():
+                        try:
+                            files.append(GGUFFile(
+                                path=file_path,
+                                name=file_path.name,
+                                size_bytes=file_path.stat().st_size
+                            ))
+                        except (OSError, PermissionError):
+                            continue
+        except PermissionError:
+            log.warning("Permission denied scanning directory: %s", directory)
+        except OSError as e:
+            log.warning("OS error scanning directory %s: %s", directory, e)
 
         return sorted(files, key=lambda x: x.name.lower())
 
@@ -86,10 +154,14 @@ class GGUFManager:
         seen_paths = set()
 
         for search_path in self.search_paths:
-            for gguf in self.scan_directory(search_path, recursive):
-                if gguf.path not in seen_paths:
-                    all_files.append(gguf)
-                    seen_paths.add(gguf.path)
+            try:
+                for gguf in self.scan_directory(search_path, recursive):
+                    if gguf.path not in seen_paths:
+                        all_files.append(gguf)
+                        seen_paths.add(gguf.path)
+            except (PermissionError, OSError) as e:
+                log.warning("Cannot scan %s: %s", search_path, e)
+                continue
 
         return sorted(all_files, key=lambda x: x.name.lower())
 

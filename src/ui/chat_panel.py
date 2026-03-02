@@ -1,9 +1,10 @@
-"""Matrix-styled Chat Interface with Markdown support"""
+"""Matrix-styled Chat Interface with rich Markdown rendering"""
 import customtkinter as ctk
 from typing import List, Optional, Callable
 from datetime import datetime
 from pathlib import Path
 import re
+import tkinter as tk
 
 # Optional clipboard support
 try:
@@ -15,7 +16,7 @@ except ImportError:
 from .theme import COLORS, DECORATIONS, RADIUS
 from .widgets import (
     MatrixFrame, MatrixScrollableFrame, MatrixButton,
-    MatrixTextbox, MatrixLabel, TerminalHeader
+    MatrixTextbox, MatrixLabel, TerminalHeader, MatrixTooltip
 )
 from ..utils.logger import get_logger
 log = get_logger("chat_panel")
@@ -23,32 +24,376 @@ log = get_logger("chat_panel")
 # Max messages to send to the API (sliding window)
 MAX_CONTEXT_MESSAGES = 40  # 20 user/assistant pairs
 
+# Max visible message widgets before oldest are destroyed (memory cap).
+# The full message *data* list is always kept for saving/export.
+MAX_VISIBLE_WIDGETS = 100
+
+# Input textbox height limits
+INPUT_MIN_HEIGHT = 44
+INPUT_MAX_HEIGHT = 160
+INPUT_LINE_HEIGHT = 20
+
+
+# ── Markdown parser ────────────────────────────────────────────────
+# Produces a list of "segments" that the RichMessageContent widget
+# renders with appropriate formatting.  Each segment is a dict:
+#   {"type": "text"|"bold"|"code"|"codeblock"|"header"|"bullet"|"numbered",
+#    "text": str, "lang": str (for codeblock)}
+
+def parse_markdown_segments(text: str) -> list:
+    """Parse markdown text into styled segments for rich rendering."""
+    segments = []
+    lines = text.split("\n")
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+
+        # Code block (``` ... ```)
+        if line.strip().startswith("```"):
+            lang = line.strip()[3:].strip()
+            code_lines = []
+            i += 1
+            while i < len(lines) and not lines[i].strip().startswith("```"):
+                code_lines.append(lines[i])
+                i += 1
+            if i < len(lines):
+                i += 1  # skip closing ```
+            segments.append({
+                "type": "codeblock",
+                "text": "\n".join(code_lines),
+                "lang": lang or ""
+            })
+            continue
+
+        # Header (# ... )
+        header_match = re.match(r'^(#{1,6})\s+(.+)$', line)
+        if header_match:
+            level = len(header_match.group(1))
+            segments.append({
+                "type": "header",
+                "text": header_match.group(2),
+                "level": level
+            })
+            i += 1
+            continue
+
+        # Bullet list
+        bullet_match = re.match(r'^(\s*)[-*]\s+(.+)$', line)
+        if bullet_match:
+            segments.append({
+                "type": "bullet",
+                "text": bullet_match.group(2),
+                "indent": len(bullet_match.group(1))
+            })
+            i += 1
+            continue
+
+        # Numbered list
+        num_match = re.match(r'^(\s*)\d+\.\s+(.+)$', line)
+        if num_match:
+            segments.append({
+                "type": "numbered",
+                "text": num_match.group(2),
+                "indent": len(num_match.group(1))
+            })
+            i += 1
+            continue
+
+        # Regular text line (may contain inline formatting)
+        if line.strip():
+            segments.append({"type": "text", "text": line})
+        else:
+            segments.append({"type": "text", "text": ""})
+
+        i += 1
+
+    return segments
+
 
 def parse_markdown_simple(text: str) -> str:
-    """Convert markdown to plain text with visual indicators"""
-    # Remove code blocks but keep content
+    """Fallback: convert markdown to plain text with visual indicators"""
     text = re.sub(r'```[\w]*\n?(.*?)```', r'[\1]', text, flags=re.DOTALL)
-    # Inline code
     text = re.sub(r'`([^`]+)`', r'[\1]', text)
-    # Bold **text** or __text__
     text = re.sub(r'\*\*([^*]+)\*\*', r'\1', text)
     text = re.sub(r'__([^_]+)__', r'\1', text)
-    # Italic *text* or _text_
     text = re.sub(r'\*([^*]+)\*', r'\1', text)
     text = re.sub(r'(?<!\w)_([^_]+)_(?!\w)', r'\1', text)
-    # Headers
     text = re.sub(r'^#{1,6}\s*(.+)$', r'>>> \1', text, flags=re.MULTILINE)
-    # Lists
     text = re.sub(r'^\s*[-*]\s+', '  \u2022 ', text, flags=re.MULTILINE)
     text = re.sub(r'^\s*\d+\.\s+', '  \u2192 ', text, flags=re.MULTILINE)
-    # Links [text](url)
     text = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', text)
-
     return text.strip()
 
 
+# ── Rich message content widget ────────────────────────────────────
+
+class RichMessageContent(ctk.CTkFrame):
+    """Renders markdown segments as styled widgets inside a frame.
+    Uses CTkTextbox in disabled state for code blocks with a distinct
+    background, CTkLabel for text with bold/normal formatting, etc."""
+
+    def __init__(self, parent, content: str, text_color: str, is_user: bool = False, **kwargs):
+        kwargs.setdefault("fg_color", "transparent")
+        super().__init__(parent, **kwargs)
+        self.grid_columnconfigure(0, weight=1)
+        self._text_color = text_color
+        self._is_user = is_user
+        self._widgets = []
+        self._content = content
+
+        if is_user:
+            # User messages: plain text, no markdown parsing
+            self._render_plain(content)
+        else:
+            self._render_rich(content)
+
+    def _render_plain(self, content: str):
+        """Render as plain text label."""
+        lbl = ctk.CTkLabel(
+            self,
+            text=content,
+            font=ctk.CTkFont(family="Consolas", size=14),
+            text_color=self._text_color,
+            anchor="nw",
+            justify="left",
+            wraplength=1,
+        )
+        lbl.grid(row=0, column=0, sticky="ew")
+        self._widgets.append(lbl)
+        self._setup_wrap(lbl)
+
+    def _render_rich(self, content: str):
+        """Render markdown segments as individual widgets."""
+        segments = parse_markdown_segments(content)
+        row = 0
+        for seg in segments:
+            stype = seg["type"]
+
+            if stype == "codeblock":
+                w = self._make_codeblock(seg["text"], seg.get("lang", ""))
+                w.grid(row=row, column=0, sticky="ew", pady=(4, 4))
+                self._widgets.append(w)
+                row += 1
+
+            elif stype == "header":
+                level = seg.get("level", 1)
+                size = max(14, 22 - (level * 2))
+                lbl = ctk.CTkLabel(
+                    self,
+                    text=seg["text"],
+                    font=ctk.CTkFont(family="Consolas", size=size, weight="bold"),
+                    text_color=COLORS["matrix_green_bright"],
+                    anchor="nw",
+                    justify="left",
+                    wraplength=1,
+                )
+                lbl.grid(row=row, column=0, sticky="ew", pady=(6, 2))
+                self._widgets.append(lbl)
+                self._setup_wrap(lbl)
+                row += 1
+
+            elif stype == "bullet":
+                indent = seg.get("indent", 0) // 2
+                prefix = "  " * indent + "\u2022 "
+                lbl = self._make_inline_label(prefix + seg["text"])
+                lbl.grid(row=row, column=0, sticky="ew", pady=(1, 1))
+                self._widgets.append(lbl)
+                row += 1
+
+            elif stype == "numbered":
+                indent = seg.get("indent", 0) // 2
+                prefix = "  " * indent + "\u2192 "
+                lbl = self._make_inline_label(prefix + seg["text"])
+                lbl.grid(row=row, column=0, sticky="ew", pady=(1, 1))
+                self._widgets.append(lbl)
+                row += 1
+
+            elif stype == "text":
+                if not seg["text"]:
+                    # Empty line spacer
+                    spacer = ctk.CTkFrame(self, fg_color="transparent", height=6)
+                    spacer.grid(row=row, column=0, sticky="ew")
+                    self._widgets.append(spacer)
+                    row += 1
+                else:
+                    lbl = self._make_inline_label(seg["text"])
+                    lbl.grid(row=row, column=0, sticky="ew", pady=(1, 1))
+                    self._widgets.append(lbl)
+                    row += 1
+
+    def _make_inline_label(self, text: str) -> ctk.CTkLabel:
+        """Create a label that handles inline bold and code styling.
+        Since CTkLabel doesn't support mixed fonts, we use text markers
+        and render the full text with the dominant style."""
+        # Strip inline markdown for display in CTkLabel
+        clean = re.sub(r'\*\*(.+?)\*\*', r'\1', text)
+        clean = re.sub(r'`([^`]+)`', r'\1', clean)
+        # Remove link markdown
+        clean = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', clean)
+        # Remove italic markdown
+        clean = re.sub(r'\*([^*]+)\*', r'\1', clean)
+        clean = re.sub(r'(?<!\w)_([^_]+)_(?!\w)', r'\1', clean)
+
+        # Detect if the line is mostly bold
+        has_bold = "**" in text
+        weight = "bold" if has_bold else "normal"
+
+        lbl = ctk.CTkLabel(
+            self,
+            text=clean,
+            font=ctk.CTkFont(family="Consolas", size=14, weight=weight),
+            text_color=self._text_color,
+            anchor="nw",
+            justify="left",
+            wraplength=1,
+        )
+        self._setup_wrap(lbl)
+        return lbl
+
+    def _make_codeblock(self, code: str, lang: str) -> ctk.CTkFrame:
+        """Create a styled code block with dark background."""
+        frame = ctk.CTkFrame(
+            self,
+            fg_color=COLORS["bg_code"],
+            border_color=COLORS["border_code"],
+            border_width=1,
+            corner_radius=4,
+        )
+        frame.grid_columnconfigure(0, weight=1)
+
+        # Language label + copy button header
+        header = ctk.CTkFrame(frame, fg_color="transparent")
+        header.grid(row=0, column=0, sticky="ew", padx=8, pady=(6, 0))
+        header.grid_columnconfigure(0, weight=1)
+
+        lang_text = lang.upper() if lang else "CODE"
+        ctk.CTkLabel(
+            header,
+            text=lang_text,
+            font=ctk.CTkFont(family="Consolas", size=10),
+            text_color=COLORS["text_muted"],
+            anchor="w",
+        ).grid(row=0, column=0, sticky="w")
+
+        copy_btn = ctk.CTkButton(
+            header,
+            text="COPY",
+            font=ctk.CTkFont(family="Consolas", size=9),
+            width=40,
+            height=18,
+            fg_color=COLORS["bg_tertiary"],
+            hover_color=COLORS["bg_hover"],
+            border_color=COLORS["border_code"],
+            border_width=1,
+            text_color=COLORS["text_muted"],
+            command=lambda: None,
+        )
+        copy_btn.grid(row=0, column=1, sticky="e")
+        # Wire up with reference to self
+        copy_btn.configure(command=lambda c=code, b=copy_btn: self._copy_code(c, b))
+
+        # Code content
+        code_tb = ctk.CTkTextbox(
+            frame,
+            fg_color=COLORS["bg_code"],
+            text_color=COLORS["matrix_green_dim"],
+            border_width=0,
+            font=ctk.CTkFont(family="Consolas", size=13),
+            wrap="none",
+            height=10,
+            activate_scrollbars=False,
+        )
+        code_tb.grid(row=1, column=0, sticky="ew", padx=8, pady=(4, 8))
+        code_tb.insert("1.0", code)
+        code_tb.configure(state="disabled")
+
+        # Auto-size height
+        def _resize_code():
+            try:
+                n_lines = code.count("\n") + 1
+                new_h = min(300, max(26, n_lines * 20 + 8))
+                code_tb.configure(height=new_h)
+            except Exception:
+                pass
+        self.after(30, _resize_code)
+
+        return frame
+
+    def _copy_code(self, code: str, btn):
+        """Copy code block to clipboard."""
+        try:
+            root = self.winfo_toplevel()
+            root.clipboard_clear()
+            root.clipboard_append(code)
+            root.update()
+            if btn:
+                btn.configure(text="OK!")
+                self.after(1500, lambda: btn.configure(text="COPY"))
+        except Exception:
+            if btn:
+                btn.configure(text="ERR")
+                self.after(1500, lambda: btn.configure(text="COPY"))
+
+    def _setup_wrap(self, label: ctk.CTkLabel):
+        """Set up dynamic wraplength for a label."""
+        def _update_wrap(event=None):
+            try:
+                p = self.master
+                while p and not isinstance(p, MatrixScrollableFrame):
+                    p = p.master
+                if p:
+                    available = p.winfo_width() - 80
+                else:
+                    available = self.winfo_width() - 40
+                label.configure(wraplength=max(200, available))
+            except Exception:
+                pass
+        self.bind("<Configure>", _update_wrap, add="+")
+        self.after(50, _update_wrap)
+
+    def update_text(self, content: str, streaming: bool = False):
+        """Update content (for streaming). Rebuild widgets."""
+        self._content = content
+        # During streaming, use simple text to avoid constant widget rebuilds
+        if streaming:
+            # Clear widgets and show plain text with cursor
+            for w in self._widgets:
+                try:
+                    w.destroy()
+                except Exception:
+                    pass
+            self._widgets.clear()
+            display = parse_markdown_simple(content) + DECORATIONS["cursor"]
+            lbl = ctk.CTkLabel(
+                self,
+                text=display,
+                font=ctk.CTkFont(family="Consolas", size=14),
+                text_color=self._text_color,
+                anchor="nw",
+                justify="left",
+                wraplength=1,
+            )
+            lbl.grid(row=0, column=0, sticky="ew")
+            self._widgets.append(lbl)
+            self._setup_wrap(lbl)
+        else:
+            # Final render: full rich rendering
+            for w in self._widgets:
+                try:
+                    w.destroy()
+                except Exception:
+                    pass
+            self._widgets.clear()
+            if self._is_user:
+                self._render_plain(content)
+            else:
+                self._render_rich(content)
+
+
+# ── Typing indicator ───────────────────────────────────────────────
+
 class TypingIndicator(ctk.CTkFrame):
-    """Animated typing indicator — bouncing dots (WhatsApp-style)"""
+    """Animated typing indicator with bouncing dots"""
 
     def __init__(self, parent, **kwargs):
         kwargs.setdefault("fg_color", "transparent")
@@ -97,10 +442,12 @@ class TypingIndicator(ctk.CTkFrame):
         self._running = False
 
 
-class ChatMessage(ctk.CTkFrame):
-    """Matrix-styled chat message bubble with copy button and selectable text"""
+# ── Chat message bubble ────────────────────────────────────────────
 
-    def __init__(self, parent, role: str, content: str, **kwargs):
+class ChatMessage(ctk.CTkFrame):
+    """Matrix-styled chat message bubble with rich content, copy, and translate"""
+
+    def __init__(self, parent, role: str, content: str, timestamp: str = None, **kwargs):
         self.role = role
         self.raw_content = content
         is_user = role == "user"
@@ -111,6 +458,12 @@ class ChatMessage(ctk.CTkFrame):
             text_color = COLORS["accent_cyan"]
             prefix = f"{DECORATIONS['prompt']} USER"
             self._content_color = COLORS["text_white"]
+        elif role == "error":
+            bg_color = "#1a0a0a"
+            border_color = COLORS["error"]
+            text_color = COLORS["error"]
+            prefix = f"{DECORATIONS['cross']} ERROR"
+            self._content_color = COLORS["error"]
         else:
             bg_color = COLORS["bg_secondary"]
             border_color = COLORS["matrix_green_dim"]
@@ -142,7 +495,8 @@ class ChatMessage(ctk.CTkFrame):
         )
         role_label.grid(row=0, column=0, sticky="w")
 
-        time_str = datetime.now().strftime("%H:%M:%S")
+        # Timestamp
+        time_str = timestamp or datetime.now().strftime("%H:%M:%S")
         time_label = ctk.CTkLabel(
             header,
             text=time_str,
@@ -176,7 +530,7 @@ class ChatMessage(ctk.CTkFrame):
         self._translate_target = "en"
         self._typing = None
 
-        if not is_user:
+        if role == "assistant":
             self.translate_btn = ctk.CTkButton(
                 header,
                 text="TRADUCIR",
@@ -200,53 +554,23 @@ class ChatMessage(ctk.CTkFrame):
         sep = ctk.CTkFrame(self, fg_color=COLORS["border_dim"], height=1)
         sep.grid(row=1, column=0, sticky="ew", padx=12, pady=2)
 
-        # Content label — auto-sizes to text, no empty space
-        display_content = parse_markdown_simple(content) if not is_user else content
-
-        self.content_label = ctk.CTkLabel(
+        # Rich content area
+        self.content_widget = RichMessageContent(
             self,
-            text=display_content,
-            font=ctk.CTkFont(family="Consolas", size=14),
+            content=content,
             text_color=self._content_color,
-            anchor="nw",
-            justify="left",
-            wraplength=1,
+            is_user=is_user,
         )
-        self.content_label.grid(row=2, column=0, sticky="ew", padx=12, pady=(4, 8))
-
-        # Dynamic wraplength — derive from the scrollable frame ancestor,
-        # which is the real width constraint (not the bubble itself).
-        def _update_wrap(event=None):
-            try:
-                # Walk up to the MatrixScrollableFrame parent
-                p = self.master
-                while p and not isinstance(p, MatrixScrollableFrame):
-                    p = p.master
-                if p:
-                    # scrollable frame width minus all horizontal padding/borders:
-                    # scrollbar ~16, frame padx 10*2, bubble padx 5*2, content padx 12*2, border 2
-                    available = p.winfo_width() - 80
-                else:
-                    available = self.winfo_width() - 40
-                self.content_label.configure(wraplength=max(200, available))
-            except Exception:
-                pass
-        self.bind("<Configure>", _update_wrap, add="+")
-        # Also trigger once after layout settles
-        self.after(50, _update_wrap)
-
-    def _auto_resize(self):
-        """No-op — CTkLabel auto-sizes to content."""
-        pass
+        self.content_widget.grid(row=2, column=0, sticky="ew", padx=12, pady=(4, 8))
 
     def show_typing(self):
-        """Show animated typing indicator, hide content label"""
-        self.content_label.grid_remove()
+        """Show animated typing indicator, hide content"""
+        self.content_widget.grid_remove()
         self._typing = TypingIndicator(self)
         self._typing.grid(row=2, column=0, sticky="w", padx=12, pady=(4, 8))
 
     def hide_typing(self):
-        """Remove typing indicator and restore content label"""
+        """Remove typing indicator and restore content"""
         if self._typing:
             self._typing.stop()
             try:
@@ -254,20 +578,18 @@ class ChatMessage(ctk.CTkFrame):
             except Exception:
                 pass
             self._typing = None
-        self.content_label.grid()
+        self.content_widget.grid()
 
     def _copy_content(self):
         """Copy message content to clipboard"""
         try:
-            # Always use tkinter root clipboard (works on X11/Wayland without extras)
             root = self.winfo_toplevel()
             root.clipboard_clear()
             root.clipboard_append(self.raw_content)
-            root.update()  # Keep clipboard after widget loses focus
+            root.update()
             self.copy_btn.configure(text="OK!")
             self.after(1500, lambda: self.copy_btn.configure(text="COPY"))
         except Exception:
-            # Last resort: try pyperclip
             try:
                 if PYPERCLIP_AVAILABLE:
                     pyperclip.copy(self.raw_content)
@@ -284,23 +606,17 @@ class ChatMessage(ctk.CTkFrame):
         if self._typing:
             self.hide_typing()
         self.raw_content = content
-        display = parse_markdown_simple(content) if self.role != "user" else content
-        self.content_label.configure(text=display + DECORATIONS["cursor"])
-
-    def _throttled_resize(self):
-        """No-op — CTkLabel auto-sizes."""
-        pass
+        self.content_widget.update_text(content, streaming=True)
 
     def finish_content(self, content: str):
-        """Finalize content (remove cursor)"""
+        """Finalize content (remove cursor, render rich markdown)"""
         if self._typing:
             self.hide_typing()
         self.raw_content = content
-        display = parse_markdown_simple(content) if self.role != "user" else content
-        self.content_label.configure(text=display)
+        self.content_widget.update_text(content, streaming=False)
 
     def _refresh_scroll_region(self):
-        """Force parent scrollable frame to recalculate and show this message"""
+        """Force parent scrollable frame to recalculate"""
         def _do():
             try:
                 p = self.master
@@ -311,20 +627,6 @@ class ChatMessage(ctk.CTkFrame):
                 canvas = p._parent_canvas
                 canvas.update_idletasks()
                 canvas.configure(scrollregion=canvas.bbox("all"))
-
-                # Scroll to show the bottom of this widget if it's off-screen
-                bbox_all = canvas.bbox("all")
-                if not bbox_all:
-                    return
-                total_h = bbox_all[3]
-                if total_h <= 0:
-                    return
-                widget_bottom = self.winfo_y() + self.winfo_height()
-                canvas_h = canvas.winfo_height()
-                visible_bottom = canvas.yview()[1] * total_h
-                if widget_bottom > visible_bottom:
-                    new_top = max(0, (widget_bottom - canvas_h + 20) / total_h)
-                    canvas.yview_moveto(min(1.0, new_top))
             except Exception:
                 pass
         self.after(80, _do)
@@ -332,7 +634,6 @@ class ChatMessage(ctk.CTkFrame):
     def _toggle_translation(self):
         """Toggle translation display"""
         if self._showing_translation:
-            # Show original
             if self._translation_frame:
                 self._translation_frame.destroy()
                 self._translation_frame = None
@@ -340,7 +641,6 @@ class ChatMessage(ctk.CTkFrame):
             self._showing_translation = False
             self._refresh_scroll_region()
         else:
-            # Translate and show
             self.translate_btn.configure(text="...", state="disabled")
             self._do_translate()
 
@@ -354,7 +654,6 @@ class ChatMessage(ctk.CTkFrame):
             return
 
         def work():
-            # Translate from model language to user language
             translated = self._translator.translate(
                 self.raw_content, self._translate_target, self._translate_source
             )
@@ -382,7 +681,6 @@ class ChatMessage(ctk.CTkFrame):
         )
         self._translation_frame.grid(row=3, column=0, sticky="ew", padx=8, pady=(0, 6))
 
-        # Header with copy button
         trans_header = ctk.CTkFrame(self._translation_frame, fg_color="transparent")
         trans_header.pack(fill="x", padx=10, pady=(8, 4))
         trans_header.columnconfigure(1, weight=1)
@@ -409,7 +707,6 @@ class ChatMessage(ctk.CTkFrame):
         )
         self._trans_copy_btn.grid(row=0, column=2, sticky="e")
 
-        # Translated text - use MatrixTextbox for consistency
         trans_textbox = MatrixTextbox(
             self._translation_frame,
             height=10,
@@ -430,7 +727,6 @@ class ChatMessage(ctk.CTkFrame):
         trans_textbox.insert("1.0", display)
         trans_textbox.configure(state="disabled")
 
-        # Auto-resize
         def resize():
             try:
                 trans_textbox.configure(state="normal")
@@ -452,8 +748,6 @@ class ChatMessage(ctk.CTkFrame):
                 pass
 
         self.after(50, resize)
-        # Update scroll region so messages below are pushed down,
-        # then scroll to show the translation
         self.after(120, self._refresh_scroll_region)
 
     def _copy_translation(self, text: str):
@@ -478,8 +772,10 @@ class ChatMessage(ctk.CTkFrame):
             self.after(1500, lambda: self._trans_copy_btn.configure(text="COPY"))
 
 
+# ── Main Chat Panel ────────────────────────────────────────────────
+
 class ChatPanel(ctk.CTkFrame):
-    """Matrix-styled chat interface"""
+    """Matrix-styled chat interface with rich rendering and keyboard shortcuts"""
 
     def __init__(
         self,
@@ -510,6 +806,7 @@ class ChatPanel(ctk.CTkFrame):
         self._on_chat_updated: Optional[Callable[[dict], None]] = None
         self._context_badge = None
         self._stream_update_pending = False
+        self.max_context_messages = MAX_CONTEXT_MESSAGES
 
         self._setup_ui()
 
@@ -518,13 +815,22 @@ class ChatPanel(ctk.CTkFrame):
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(1, weight=1)
 
-        # Header with export button
+        # Header with context indicator and export button
         header_frame = ctk.CTkFrame(self, fg_color="transparent")
         header_frame.grid(row=0, column=0, sticky="ew")
         header_frame.grid_columnconfigure(0, weight=1)
 
         header = TerminalHeader(header_frame, "NEURAL INTERFACE", "chat.session")
         header.grid(row=0, column=0, sticky="ew")
+
+        # Context indicator (messages in context: X/40)
+        self.context_label = ctk.CTkLabel(
+            header_frame,
+            text=f"CTX: 0/{self.max_context_messages}",
+            font=ctk.CTkFont(family="Consolas", size=10),
+            text_color=COLORS["text_muted"],
+        )
+        self.context_label.grid(row=0, column=1, padx=(0, 5), pady=5, sticky="e")
 
         self.export_btn = ctk.CTkButton(
             header_frame,
@@ -539,7 +845,8 @@ class ChatPanel(ctk.CTkFrame):
             text_color=COLORS["matrix_green"],
             command=self._export_chat,
         )
-        self.export_btn.grid(row=0, column=1, padx=10, pady=5, sticky="e")
+        self.export_btn.grid(row=0, column=2, padx=10, pady=5, sticky="e")
+        MatrixTooltip(self.export_btn, "Export chat as Markdown file")
 
         # Messages container
         self.messages_container = ctk.CTkFrame(self, fg_color=COLORS["bg_primary"])
@@ -570,19 +877,24 @@ class ChatPanel(ctk.CTkFrame):
             font=ctk.CTkFont(family="Consolas", size=14, weight="bold"),
             text_color=COLORS["matrix_green"]
         )
-        prompt_label.grid(row=0, column=0, padx=(15, 10), pady=15, sticky="w")
+        prompt_label.grid(row=0, column=0, padx=(15, 10), pady=15, sticky="nw")
 
-        # Text input
+        # Text input with auto-resize
         self.input_text = MatrixTextbox(
             self.input_frame,
-            height=80,
+            height=INPUT_MIN_HEIGHT,
             wrap="word",
             border_color=COLORS["matrix_green_dim"],
             fg_color=COLORS["bg_input"]
         )
         self.input_text.grid(row=0, column=1, sticky="ew", padx=5, pady=10)
+
+        # Keyboard shortcuts
         self.input_text.bind("<Return>", self._on_enter)
-        self.input_text.bind("<Shift-Return>", lambda e: None)
+        self.input_text.bind("<Shift-Return>", self._on_shift_enter)
+        self.input_text.bind("<KeyRelease>", self._on_input_change)
+        # Escape to stop generation (bind on root window via tkinter, not CTk)
+        self.winfo_toplevel().bind("<Escape>", self._on_escape)
 
         # Focus glow effect
         self.input_text.bind("<FocusIn>", lambda e: self.input_text.configure(
@@ -594,7 +906,7 @@ class ChatPanel(ctk.CTkFrame):
 
         # Buttons container
         btn_frame = ctk.CTkFrame(self.input_frame, fg_color="transparent")
-        btn_frame.grid(row=0, column=2, padx=15, pady=10)
+        btn_frame.grid(row=0, column=2, padx=15, pady=10, sticky="n")
 
         # Send button
         self.send_button = ctk.CTkButton(
@@ -611,6 +923,7 @@ class ChatPanel(ctk.CTkFrame):
             command=self._send_message
         )
         self.send_button.pack(pady=(0, 5))
+        MatrixTooltip(self.send_button, "Send message (Enter)")
 
         # Stop button (hidden initially)
         self.stop_button = ctk.CTkButton(
@@ -626,6 +939,7 @@ class ChatPanel(ctk.CTkFrame):
             text_color=COLORS["error"],
             command=self._stop_generation
         )
+        MatrixTooltip(self.stop_button, "Stop generation (Escape)")
 
         # Clear button
         self.clear_button = ctk.CTkButton(
@@ -642,6 +956,7 @@ class ChatPanel(ctk.CTkFrame):
             command=self.clear_chat
         )
         self.clear_button.pack(pady=(5, 0))
+        MatrixTooltip(self.clear_button, "Clear all messages and start fresh")
 
         # Translation toggle row
         self.translate_frame = ctk.CTkFrame(self.input_frame, fg_color="transparent")
@@ -676,6 +991,15 @@ class ChatPanel(ctk.CTkFrame):
         )
         self.translate_status.pack(side="left", padx=(8, 0))
 
+        # Shortcut hints
+        shortcut_label = ctk.CTkLabel(
+            self.translate_frame,
+            text="Enter=Send  Shift+Enter=Newline  Esc=Stop",
+            font=ctk.CTkFont(family="Consolas", size=10),
+            text_color=COLORS["text_dim"],
+        )
+        shortcut_label.pack(side="right", padx=(10, 0))
+
         # Status bar separator
         status_sep = ctk.CTkFrame(self, fg_color=COLORS["border_green"], height=1)
         status_sep.grid(row=3, column=0, sticky="ew")
@@ -701,9 +1025,10 @@ class ChatPanel(ctk.CTkFrame):
         )
         self.token_count.pack(side="right", padx=10, pady=3)
 
+    # ── Welcome empty state ────────────────────────────────────────
+
     def _show_welcome(self):
-        """Show welcome message"""
-        # Destroy previous welcome if it exists to avoid duplicates
+        """Show a welcoming empty state message"""
         if hasattr(self, '_welcome_widget') and self._welcome_widget and self._welcome_widget.winfo_exists():
             self._welcome_widget.destroy()
 
@@ -711,53 +1036,116 @@ class ChatPanel(ctk.CTkFrame):
             self.messages_frame,
             fg_color=COLORS["bg_card"],
             border_color=COLORS["matrix_green_dim"],
-            border_width=1
+            border_width=1,
+            corner_radius=8,
         )
-        welcome_frame.pack(fill="x", pady=20, padx=20)
+        welcome_frame.pack(fill="x", pady=40, padx=30)
 
-        welcome_text = f"""
-  {DECORATIONS['block_dark']*3} {DECORATIONS['block']*3} {DECORATIONS['block_dark']*3}
-
-  DRAGO MODEL RUNNER v1.0
-  {DECORATIONS['h_line'] * 32}
-
-  Sistema de inferencia local.
-
-  {DECORATIONS['prompt']} ENTER        Enviar mensaje
-  {DECORATIONS['prompt']} SHIFT+ENTER  Nueva linea
-  {DECORATIONS['prompt']} CLEAR        Reiniciar sesion
-  {DECORATIONS['prompt']} COPY         Copiar mensajes
-
-  {DECORATIONS['h_line'] * 32}
-  Selecciona un modelo para comenzar.
-"""
-
-        welcome_label = ctk.CTkLabel(
+        # Logo / title area
+        logo_label = ctk.CTkLabel(
             welcome_frame,
-            text=welcome_text,
+            text=f"\n{DECORATIONS['block_dark']*2} {DECORATIONS['block']*2} {DECORATIONS['block_dark']*2}",
+            font=ctk.CTkFont(family="Consolas", size=18),
+            text_color=COLORS["matrix_green_dark"],
+        )
+        logo_label.pack(pady=(20, 0))
+
+        title_label = ctk.CTkLabel(
+            welcome_frame,
+            text="DRAGO MODEL RUNNER",
+            font=ctk.CTkFont(family="Consolas", size=20, weight="bold"),
+            text_color=COLORS["matrix_green_bright"],
+        )
+        title_label.pack(pady=(8, 4))
+
+        subtitle_label = ctk.CTkLabel(
+            welcome_frame,
+            text="Sistema de inferencia local",
             font=ctk.CTkFont(family="Consolas", size=13),
             text_color=COLORS["matrix_green_dim"],
-            justify="left",
-            anchor="w",
-            wraplength=600
         )
-        welcome_label.pack(fill="x", padx=20, pady=15)
+        subtitle_label.pack(pady=(0, 12))
 
-        def _update_welcome_wrap(event=None):
-            try:
-                welcome_label.configure(wraplength=max(200, welcome_frame.winfo_width() - 60))
-            except Exception:
-                pass
+        # Separator
+        sep = ctk.CTkFrame(welcome_frame, fg_color=COLORS["border_green"], height=1)
+        sep.pack(fill="x", padx=30, pady=(0, 12))
 
-        welcome_frame.bind("<Configure>", _update_welcome_wrap, add="+")
+        # Shortcut hints in a styled area
+        hints_frame = ctk.CTkFrame(welcome_frame, fg_color=COLORS["bg_secondary"], corner_radius=4)
+        hints_frame.pack(fill="x", padx=20, pady=(0, 8))
+
+        hints = [
+            (f"{DECORATIONS['prompt']} ENTER", "Enviar mensaje"),
+            (f"{DECORATIONS['prompt']} SHIFT+ENTER", "Nueva linea"),
+            (f"{DECORATIONS['prompt']} ESCAPE", "Detener generacion"),
+            (f"{DECORATIONS['prompt']} CLEAR", "Reiniciar sesion"),
+            (f"{DECORATIONS['prompt']} COPY", "Copiar mensajes"),
+        ]
+        for key, desc in hints:
+            row_frame = ctk.CTkFrame(hints_frame, fg_color="transparent")
+            row_frame.pack(fill="x", padx=12, pady=3)
+
+            ctk.CTkLabel(
+                row_frame,
+                text=key,
+                font=ctk.CTkFont(family="Consolas", size=12, weight="bold"),
+                text_color=COLORS["matrix_green"],
+                width=160,
+                anchor="w",
+            ).pack(side="left")
+
+            ctk.CTkLabel(
+                row_frame,
+                text=desc,
+                font=ctk.CTkFont(family="Consolas", size=12),
+                text_color=COLORS["text_muted"],
+                anchor="w",
+            ).pack(side="left")
+
+        # Bottom hint
+        bottom_label = ctk.CTkLabel(
+            welcome_frame,
+            text="Selecciona un modelo para comenzar.",
+            font=ctk.CTkFont(family="Consolas", size=12),
+            text_color=COLORS["text_muted"],
+        )
+        bottom_label.pack(pady=(8, 20))
 
         self._welcome_widget = welcome_frame
 
+    # ── Keyboard handlers ──────────────────────────────────────────
+
     def _on_enter(self, event):
-        """Handle Enter key"""
-        if not event.state & 0x1:
-            self._send_message()
-            return "break"
+        """Enter key sends message (unless Shift is held)"""
+        if event.state & 0x1:  # Shift held
+            return  # Let default behavior insert newline
+        self._send_message()
+        return "break"
+
+    def _on_shift_enter(self, event):
+        """Shift+Enter inserts a newline"""
+        return None
+
+    def _on_escape(self, event):
+        """Escape stops generation"""
+        if self.is_generating:
+            self._stop_generation()
+
+    def _on_input_change(self, event=None):
+        """Auto-resize input box based on content"""
+        try:
+            content = self.input_text.get("1.0", "end-1c")
+            if not content.strip():
+                self.input_text.configure(height=INPUT_MIN_HEIGHT)
+                return
+
+            lines = content.count("\n") + 1
+            needed = max(INPUT_MIN_HEIGHT, min(INPUT_MAX_HEIGHT, lines * INPUT_LINE_HEIGHT + 8))
+            self.input_text.configure(height=int(needed))
+        except Exception:
+            pass
+
+    # ── Send / Stop ────────────────────────────────────────────────
 
     def _send_message(self):
         """Send user message"""
@@ -770,6 +1158,7 @@ class ChatPanel(ctk.CTkFrame):
 
         # Clear input immediately for snappy feel
         self.input_text.delete("1.0", "end")
+        self.input_text.configure(height=INPUT_MIN_HEIGHT)
 
         if hasattr(self, '_welcome_widget') and self._welcome_widget.winfo_exists():
             self._welcome_widget.destroy()
@@ -787,11 +1176,9 @@ class ChatPanel(ctk.CTkFrame):
         """Stop generation - finalize partial response and notify parent"""
         if self.current_assistant_widget:
             if self.current_response:
-                # Partial response — keep the bubble with what we have
                 self.messages.append({"role": "assistant", "content": self.current_response})
                 self.current_assistant_widget.finish_content(self.current_response)
             else:
-                # No tokens received — remove the empty/typing bubble
                 self.current_assistant_widget.destroy()
                 if self.current_assistant_widget in self.message_widgets:
                     self.message_widgets.remove(self.current_assistant_widget)
@@ -803,7 +1190,6 @@ class ChatPanel(ctk.CTkFrame):
         self._set_status("ready", "Generacion detenida")
         self._update_token_count()
 
-        # Notify parent to cancel the backend thread
         if self.on_stop:
             self.on_stop()
 
@@ -819,6 +1205,8 @@ class ChatPanel(ctk.CTkFrame):
             self.stop_button.pack_forget()
             self.send_button.pack(pady=(0, 5))
             self.input_text.configure(state="normal", border_color=COLORS["matrix_green_dim"])
+            # Refocus input after generation
+            self.after(100, lambda: self.input_text.focus_set())
 
     def _set_status(self, status: str, text: str):
         """Update status bar"""
@@ -839,23 +1227,49 @@ class ChatPanel(ctk.CTkFrame):
             text_color=colors.get(status, COLORS["text_muted"])
         )
 
-    def add_message(self, role: str, content: str) -> ChatMessage:
+    # ── Message management ─────────────────────────────────────────
+
+    def _trim_old_widgets(self):
+        """Destroy the oldest message widgets when count exceeds MAX_VISIBLE_WIDGETS.
+
+        Prevents unbounded Tk widget accumulation in long chat sessions.
+        The underlying self.messages list is never trimmed, only the UI widgets.
+        """
+        excess = len(self.message_widgets) - MAX_VISIBLE_WIDGETS
+        if excess <= 0:
+            return
+        for _ in range(excess):
+            old = self.message_widgets.pop(0)
+            try:
+                old.destroy()
+            except Exception:
+                pass
+
+    def add_message(self, role: str, content: str, timestamp: str = None) -> ChatMessage:
         """Add message to chat"""
         self.messages.append({"role": role, "content": content})
 
-        widget = ChatMessage(self.messages_frame, role, content)
+        widget = ChatMessage(self.messages_frame, role, content, timestamp=timestamp)
         if role == "assistant" and self._translator:
             widget._translator = self._translator
             widget._translate_source = self._translate_source
             widget._translate_target = self._translate_target
         widget.pack(fill="x", pady=8, padx=5)
         self.message_widgets.append(widget)
+        self._trim_old_widgets()
 
         self.after(50, self._scroll_to_bottom)
         self._update_token_count()
         self._notify_chat_updated()
 
         return widget
+
+    def add_error_message(self, content: str):
+        """Add a styled error message bubble"""
+        widget = ChatMessage(self.messages_frame, "error", content)
+        widget.pack(fill="x", pady=8, padx=5)
+        self.message_widgets.append(widget)
+        self.after(50, self._scroll_to_bottom)
 
     def start_assistant_message(self):
         """Start streaming assistant message with typing indicator"""
@@ -888,7 +1302,7 @@ class ChatPanel(ctk.CTkFrame):
             self._first_token_received = True
             self._set_status("streaming", "Generando respuesta...")
 
-        # Throttle UI updates — batch tokens, update every 50ms
+        # Throttle UI updates -- batch tokens, update every 50ms
         if not self._stream_update_pending:
             self._stream_update_pending = True
             self.after(50, self._flush_stream_update)
@@ -898,33 +1312,44 @@ class ChatPanel(ctk.CTkFrame):
         self._stream_update_pending = False
         if self.current_assistant_widget and self.current_response:
             self.current_assistant_widget.update_content(self.current_response)
-        # Auto-scroll periodically
+        # Auto-scroll during streaming
         self._scroll_to_bottom()
 
     def finish_assistant_message(self):
         """Finish streaming"""
-        self._stream_update_pending = False  # Cancel any pending flush
+        self._stream_update_pending = False
         if self.current_assistant_widget:
             if self.current_response:
                 self.messages.append({"role": "assistant", "content": self.current_response})
                 self.current_assistant_widget.finish_content(self.current_response)
             else:
-                # No tokens received — remove the empty bubble
                 self.current_assistant_widget.destroy()
                 if self.current_assistant_widget in self.message_widgets:
                     self.message_widgets.remove(self.current_assistant_widget)
 
         self.current_assistant_widget = None
         self.current_response = ""
+        self._trim_old_widgets()
         self._toggle_generating(False)
         self._set_status("ready", "Listo")
         self._update_token_count()
         self._notify_chat_updated()
         self._scroll_to_bottom()
 
+    # ── Scroll ─────────────────────────────────────────────────────
+
     def _scroll_to_bottom(self):
-        """Scroll to bottom"""
-        self.messages_frame._parent_canvas.yview_moveto(1.0)
+        """Reliably scroll to bottom of messages.
+        Uses update_idletasks + scroll region recalc for reliability."""
+        try:
+            canvas = self.messages_frame._parent_canvas
+            canvas.update_idletasks()
+            canvas.configure(scrollregion=canvas.bbox("all"))
+            canvas.yview_moveto(1.0)
+        except Exception:
+            pass
+
+    # ── Token/context count ────────────────────────────────────────
 
     def _update_token_count(self):
         """Update token count estimate with sliding window info"""
@@ -932,11 +1357,21 @@ class ChatPanel(ctk.CTkFrame):
         total_chars = sum(len(m["content"]) for m in self.messages)
         estimated_tokens = total_chars // 4
 
-        if total_msgs > MAX_CONTEXT_MESSAGES:
-            self.token_count.configure(
-                text=f"~{estimated_tokens} tok | {total_msgs} msgs (window: {MAX_CONTEXT_MESSAGES})"
+        # Update context indicator in header
+        context_msgs = min(total_msgs, self.max_context_messages)
+        try:
+            self.context_label.configure(
+                text=f"CTX: {context_msgs}/{self.max_context_messages}",
+                text_color=COLORS["warning"] if total_msgs > self.max_context_messages else COLORS["text_muted"]
             )
-            dropped = total_msgs - MAX_CONTEXT_MESSAGES
+        except Exception:
+            pass
+
+        if total_msgs > self.max_context_messages:
+            self.token_count.configure(
+                text=f"~{estimated_tokens} tok | {total_msgs} msgs (window: {self.max_context_messages})"
+            )
+            dropped = total_msgs - self.max_context_messages
             if self._context_badge is None:
                 self._context_badge = ctk.CTkLabel(
                     self.messages_frame,
@@ -956,13 +1391,10 @@ class ChatPanel(ctk.CTkFrame):
                 self._context_badge.destroy()
                 self._context_badge = None
 
-    def clear_chat(self, _from_parent: bool = False):
-        """Clear all messages.
+    # ── Clear / Lifecycle ──────────────────────────────────────────
 
-        Args:
-            _from_parent: True when called by _create_new_chat to avoid
-                          recursive callback loop.
-        """
+    def clear_chat(self, _from_parent: bool = False):
+        """Clear all messages."""
         for widget in self.message_widgets:
             widget.destroy()
         self.message_widgets.clear()
@@ -978,7 +1410,7 @@ class ChatPanel(ctk.CTkFrame):
         if not _from_parent:
             self._current_chat = None
             if self._on_chat_updated:
-                self._on_chat_updated(None)  # Signal to parent to create new chat
+                self._on_chat_updated(None)
 
     def set_system_prompt(self, prompt: str):
         """Set the system prompt for this chat session"""
@@ -988,11 +1420,9 @@ class ChatPanel(ctk.CTkFrame):
         """Get messages for API with sliding window and optional system prompt"""
         msgs = self.messages.copy()
 
-        # Apply sliding window
-        if len(msgs) > MAX_CONTEXT_MESSAGES:
-            msgs = msgs[-MAX_CONTEXT_MESSAGES:]
+        if len(msgs) > self.max_context_messages:
+            msgs = msgs[-self.max_context_messages:]
 
-        # Prepend system prompt if set
         if self._system_prompt:
             msgs = [{"role": "system", "content": self._system_prompt}] + msgs
 
@@ -1005,8 +1435,6 @@ class ChatPanel(ctk.CTkFrame):
         self._translate_target = target_lang
         self._auto_translate = auto_translate
 
-        # Wire translator to all existing assistant widgets (covers messages
-        # loaded from history before the translator finished initializing)
         for widget in self.message_widgets:
             if hasattr(widget, 'role') and widget.role == "assistant":
                 widget._translator = translator
@@ -1041,7 +1469,7 @@ class ChatPanel(ctk.CTkFrame):
             )
             self.translate_label.configure(text_color=COLORS["text_muted"])
 
-    # ── Chat lifecycle methods ──────────────────────────────────────
+    # ── Chat lifecycle methods ─────────────────────────────────────
 
     def set_chat_callback(self, callback: Callable[[dict], None]):
         """Set callback for when chat data changes (for auto-save)."""
@@ -1049,7 +1477,6 @@ class ChatPanel(ctk.CTkFrame):
 
     def load_chat(self, chat_data: dict):
         """Load a chat session into the panel."""
-        # Clear current messages
         for widget in self.message_widgets:
             widget.destroy()
         self.message_widgets.clear()
@@ -1060,13 +1487,11 @@ class ChatPanel(ctk.CTkFrame):
 
         self._current_chat = chat_data
 
-        # Load messages
         for msg in chat_data.get("messages", []):
             widget = ChatMessage(self.messages_frame, msg["role"], msg["content"])
             widget.pack(fill="x", pady=8, padx=5)
             self.message_widgets.append(widget)
             self.messages.append(msg)
-            # Wire translator for assistant messages
             if msg["role"] == "assistant" and self._translator:
                 widget._translator = self._translator
                 widget._translate_source = self._translate_source
@@ -1075,7 +1500,6 @@ class ChatPanel(ctk.CTkFrame):
         if not chat_data.get("messages"):
             self._show_welcome()
 
-        # Set system prompt if stored
         if chat_data.get("system_prompt"):
             self._system_prompt = chat_data["system_prompt"]
 
@@ -1109,7 +1533,6 @@ class ChatPanel(ctk.CTkFrame):
             return
 
         title = self._current_chat.get("title", "chat")
-        # Sanitize filename
         safe_title = "".join(c for c in title if c.isalnum() or c in " -_")[:50].strip()
 
         path = filedialog.asksaveasfilename(
@@ -1121,7 +1544,6 @@ class ChatPanel(ctk.CTkFrame):
         if not path:
             return
 
-        # Build markdown
         lines = [
             f"# {title}",
             f"**Model:** {self._current_chat.get('model', 'N/A')} | "

@@ -29,7 +29,8 @@ from .widgets import (
     TerminalHeader, MatrixScrollableFrame
 )
 from ..core import GGUFManager, ModelConfig, ModelParameters, OllamaClient
-from ..core.model_config import SYSTEM_PROMPTS
+from ..core.model_config import SYSTEM_PROMPTS, PARAMETER_PRESETS
+from ..core.gguf_manager import detect_split_gguf
 from .system_panel import SystemInfo, estimate_model_performance
 
 
@@ -96,6 +97,16 @@ class DropZone(ctk.CTkFrame):
             wraplength=350
         )
         self.file_label.pack(pady=(10, 0))
+
+        # Warning label (for split files etc.)
+        self.warning_label = ctk.CTkLabel(
+            content,
+            text="",
+            font=ctk.CTkFont(family="Consolas", size=11),
+            text_color=COLORS["warning"],
+            wraplength=350
+        )
+        self.warning_label.pack(pady=(5, 0))
 
         # Bind click recursively to all children
         self._bind_click_recursive(self)
@@ -198,11 +209,52 @@ class DropZone(ctk.CTkFrame):
             messagebox.showerror("Error", f"Cannot read file: {exc}")
             return
 
+        # Check for split GGUF
+        split_info = detect_split_gguf(file_path)
+        warning_text = ""
+        if split_info:
+            if not split_info["all_complete"]:
+                missing = split_info["missing_parts"]
+                warning_text = (
+                    f"ARCHIVO DIVIDIDO: parte {split_info['part']} de {split_info['total']}. "
+                    f"Faltan partes: {', '.join(str(p) for p in missing)}. "
+                    f"Todas las partes deben estar en la misma carpeta."
+                )
+                self.warning_label.configure(
+                    text=warning_text,
+                    text_color=COLORS["error"]
+                )
+            else:
+                warning_text = (
+                    f"Archivo dividido: parte {split_info['part']} de {split_info['total']}. "
+                    f"Todas las partes encontradas."
+                )
+                self.warning_label.configure(
+                    text=warning_text,
+                    text_color=COLORS["success"]
+                )
+        else:
+            self.warning_label.configure(text="")
+
+        # Extract quantization info
+        quant = ""
+        m = re.search(r'[_-](Q\d+[_-]?K?[_-]?[A-Z]?)', filename, re.IGNORECASE)
+        if m:
+            quant = m.group(1).upper().replace('-', '_')
+
+        info_parts = [filename, f"[{size_gb:.2f} GB]"]
+        if quant:
+            info_parts.append(f"Quant: {quant}")
+
         self.icon_label.configure(text=DECORATIONS["check"], text_color=COLORS["success"])
         self.main_label.configure(text="ARCHIVO CARGADO")
         self.sub_label.configure(text="clic para cambiar")
-        self.file_label.configure(text=f"{filename}\n[{size_gb:.2f} GB]")
-        self.configure(border_color=COLORS["success"])
+        self.file_label.configure(text="\n".join(info_parts))
+
+        if split_info and not split_info["all_complete"]:
+            self.configure(border_color=COLORS["warning"])
+        else:
+            self.configure(border_color=COLORS["success"])
 
         # Estimate performance
         self._show_performance_estimate(size_gb)
@@ -266,15 +318,17 @@ class DropZone(ctk.CTkFrame):
         self.main_label.configure(text="ARRASTRA UN ARCHIVO GGUF AQUI")
         self.sub_label.configure(text="o haz clic para explorar")
         self.file_label.configure(text="")
+        self.warning_label.configure(text="")
         self.configure(border_color=COLORS["matrix_green_dim"])
         if hasattr(self, 'perf_label'):
             self.perf_label.destroy()
 
 
 class ModelCard(ctk.CTkFrame):
-    """Matrix-styled model info card"""
+    """Matrix-styled model info card with details"""
 
-    def __init__(self, parent, model_name: str, model_size: str, on_delete: Callable, **kwargs):
+    def __init__(self, parent, model_name: str, model_size: str, on_delete: Callable,
+                 quantization: str = "", family: str = "", params: str = "", **kwargs):
         super().__init__(
             parent,
             fg_color=COLORS["bg_card"],
@@ -306,9 +360,20 @@ class ModelCard(ctk.CTkFrame):
         )
         name_label.grid(row=0, column=1, sticky="ew", padx=5, pady=(10, 0))
 
+        # Detail line: size + quantization + family + params
+        detail_parts = [f"Size: {model_size}"]
+        if quantization:
+            detail_parts.append(f"Quant: {quantization}")
+        if family:
+            detail_parts.append(f"Family: {family}")
+        if params:
+            detail_parts.append(f"Params: {params}")
+
+        detail_text = " | ".join(detail_parts)
+
         size_label = ctk.CTkLabel(
             self,
-            text=f"Size: {model_size}",
+            text=detail_text,
             font=ctk.CTkFont(family="Consolas", size=11),
             text_color=COLORS["text_muted"],
             anchor="w"
@@ -357,20 +422,49 @@ class ModelManagerPanel(ctk.CTkFrame):
     def _setup_ui(self):
         """Setup model manager UI"""
         self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure(1, weight=1)
+        self.grid_rowconfigure(2, weight=1)
 
         # Header
         header = TerminalHeader(self, "MODEL FORGE", "crear y gestionar modelos")
         header.grid(row=0, column=0, sticky="ew")
 
+        # Step navigation bar
+        self._step_widgets = {}
+        nav_bar = ctk.CTkFrame(self, fg_color=COLORS["bg_tertiary"], height=36)
+        nav_bar.grid(row=1, column=0, sticky="ew", padx=0, pady=0)
+        nav_bar.grid_propagate(False)
+        nav_inner = ctk.CTkFrame(nav_bar, fg_color="transparent")
+        nav_inner.pack(side="left", padx=10, pady=4)
+
+        ctk.CTkLabel(
+            nav_inner, text=f"{DECORATIONS['arrow_r']} IR A:",
+            font=ctk.CTkFont(family="Consolas", size=10),
+            text_color=COLORS["text_muted"]
+        ).pack(side="left", padx=(0, 8))
+
+        for step_n, step_label in [(1, "ARCHIVO"), (2, "CONFIG"), (3, "PARAMS"), (4, "CREAR")]:
+            btn = ctk.CTkButton(
+                nav_inner,
+                text=f"{step_n}. {step_label}",
+                font=ctk.CTkFont(family="Consolas", size=10),
+                width=80, height=24,
+                fg_color=COLORS["bg_secondary"],
+                hover_color=COLORS["bg_hover"],
+                border_color=COLORS["border_dim"],
+                border_width=1,
+                text_color=COLORS["matrix_green_dim"],
+                command=lambda n=step_n: self._scroll_to_step(n)
+            )
+            btn.pack(side="left", padx=2)
+
         # Main scrollable content
         self.content = MatrixScrollableFrame(self, fg_color=COLORS["bg_primary"], border_width=0)
-        self.content.grid(row=1, column=0, sticky="nsew", padx=10, pady=10)
+        self.content.grid(row=2, column=0, sticky="nsew", padx=10, pady=10)
         self.content.grid_columnconfigure(0, weight=1)
 
-        # ═══════════════════════════════════════════════════════════
+        # ===============================================================
         # STEP 1: CARGAR ARCHIVO GGUF
-        # ═══════════════════════════════════════════════════════════
+        # ===============================================================
         step1 = self._create_section(
             self.content, "PASO 1: CARGAR ARCHIVO GGUF",
             description="Selecciona o arrastra un archivo .gguf desde tu disco (o USB). "
@@ -381,14 +475,15 @@ class ModelManagerPanel(ctk.CTkFrame):
             step_num=1
         )
         step1.pack(fill="x", pady=(0, 20))
+        self._step_widgets[1] = step1
 
         # Drop zone
         self.drop_zone = DropZone(step1, on_file_dropped=self._on_file_selected, height=150)
         self.drop_zone.pack(fill="x", padx=15, pady=15)
 
-        # ═══════════════════════════════════════════════════════════
+        # ===============================================================
         # STEP 2: CONFIGURAR MODELO (MODELFILE)
-        # ═══════════════════════════════════════════════════════════
+        # ===============================================================
         step2 = self._create_section(
             self.content, "PASO 2: CONFIGURAR MODELO (Modelfile)",
             description="Dale un nombre corto a tu modelo (ej: 'dolphin-7b') y configura "
@@ -397,6 +492,7 @@ class ModelManagerPanel(ctk.CTkFrame):
             step_num=2
         )
         step2.pack(fill="x", pady=(0, 20))
+        self._step_widgets[2] = step2
 
         config_frame = ctk.CTkFrame(step2, fg_color="transparent")
         config_frame.pack(fill="x", padx=15, pady=10)
@@ -408,13 +504,16 @@ class ModelManagerPanel(ctk.CTkFrame):
         )
         self.name_entry = MatrixEntry(config_frame, placeholder_text="mi-modelo-custom", width=300)
         self.name_entry.grid(row=0, column=1, padx=10, pady=(10, 0), sticky="w")
+        self.name_entry.bind("<KeyRelease>", self._validate_name_live)
 
-        ctk.CTkLabel(
+        # Inline validation label
+        self.name_validation_label = ctk.CTkLabel(
             config_frame,
             text="Solo letras minusculas, numeros y guiones. Ej: dolphin-7b, llama3-code",
             font=ctk.CTkFont(family="Consolas", size=10),
             text_color=COLORS["text_muted"],
-        ).grid(row=1, column=1, padx=10, pady=(2, 8), sticky="w")
+        )
+        self.name_validation_label.grid(row=1, column=1, padx=10, pady=(2, 8), sticky="w")
 
         # System Prompt Template
         MatrixLabel(config_frame, text="Plantilla de prompt:", size="sm").grid(
@@ -452,9 +551,9 @@ class ModelManagerPanel(ctk.CTkFrame):
         )
         hint_label.pack(anchor="w", pady=(5, 0))
 
-        # ═══════════════════════════════════════════════════════════
+        # ===============================================================
         # STEP 3: PARAMETROS DE INFERENCIA
-        # ═══════════════════════════════════════════════════════════
+        # ===============================================================
         step3 = self._create_section(
             self.content, "PASO 3: PARAMETROS DE INFERENCIA",
             description="Ajusta los parametros de generacion. "
@@ -462,63 +561,81 @@ class ModelManagerPanel(ctk.CTkFrame):
             step_num=3
         )
         step3.pack(fill="x", pady=(0, 20))
+        self._step_widgets[3] = step3
 
         params_frame = ctk.CTkFrame(step3, fg_color="transparent")
         params_frame.pack(fill="x", padx=15, pady=10)
         params_frame.grid_columnconfigure((1, 3), weight=1)
 
+        # Parameter presets row
+        MatrixLabel(params_frame, text="Preset:", size="sm").grid(
+            row=0, column=0, padx=10, pady=8, sticky="w"
+        )
+        preset_row = ctk.CTkFrame(params_frame, fg_color="transparent")
+        preset_row.grid(row=0, column=1, columnspan=3, padx=10, pady=8, sticky="w")
+
+        for preset_name in PARAMETER_PRESETS:
+            btn = MatrixButton(
+                preset_row,
+                text=preset_name.upper(),
+                height=28,
+                width=90,
+                command=lambda n=preset_name: self._apply_param_preset(n)
+            )
+            btn.pack(side="left", padx=(0, 6))
+
         # Temperature
-        MatrixLabel(params_frame, text="Temperature:", size="sm").grid(row=0, column=0, padx=10, pady=8, sticky="w")
+        MatrixLabel(params_frame, text="Temperature:", size="sm").grid(row=1, column=0, padx=10, pady=8, sticky="w")
         self.temp_slider = MatrixSlider(params_frame, from_=0, to=2, number_of_steps=40)
         self.temp_slider.set(0.7)
-        self.temp_slider.grid(row=0, column=1, padx=10, pady=8, sticky="ew")
+        self.temp_slider.grid(row=1, column=1, padx=10, pady=8, sticky="ew")
         self.temp_label = MatrixLabel(params_frame, text="0.70", size="sm")
-        self.temp_label.grid(row=0, column=2, padx=10, pady=8)
+        self.temp_label.grid(row=1, column=2, padx=10, pady=8)
         self.temp_slider.configure(command=lambda v: self.temp_label.configure(text=f"{v:.2f}"))
         ctk.CTkLabel(params_frame, text="Bajo = preciso, Alto = creativo",
                      font=ctk.CTkFont(family="Consolas", size=10), text_color=COLORS["text_muted"]
-                     ).grid(row=0, column=3, padx=10, pady=8, sticky="w")
+                     ).grid(row=1, column=3, padx=10, pady=8, sticky="w")
 
         # Top P
-        MatrixLabel(params_frame, text="Top P:", size="sm").grid(row=1, column=0, padx=10, pady=8, sticky="w")
+        MatrixLabel(params_frame, text="Top P:", size="sm").grid(row=2, column=0, padx=10, pady=8, sticky="w")
         self.top_p_slider = MatrixSlider(params_frame, from_=0, to=1, number_of_steps=20)
         self.top_p_slider.set(0.9)
-        self.top_p_slider.grid(row=1, column=1, padx=10, pady=8, sticky="ew")
+        self.top_p_slider.grid(row=2, column=1, padx=10, pady=8, sticky="ew")
         self.top_p_label = MatrixLabel(params_frame, text="0.90", size="sm")
-        self.top_p_label.grid(row=1, column=2, padx=10, pady=8)
+        self.top_p_label.grid(row=2, column=2, padx=10, pady=8)
         self.top_p_slider.configure(command=lambda v: self.top_p_label.configure(text=f"{v:.2f}"))
         ctk.CTkLabel(params_frame, text="Diversidad de tokens. 0.9 = buen balance",
                      font=ctk.CTkFont(family="Consolas", size=10), text_color=COLORS["text_muted"]
-                     ).grid(row=1, column=3, padx=10, pady=8, sticky="w")
+                     ).grid(row=2, column=3, padx=10, pady=8, sticky="w")
 
         # Repeat Penalty
-        MatrixLabel(params_frame, text="Repeat Penalty:", size="sm").grid(row=2, column=0, padx=10, pady=8, sticky="w")
+        MatrixLabel(params_frame, text="Repeat Penalty:", size="sm").grid(row=3, column=0, padx=10, pady=8, sticky="w")
         self.repeat_slider = MatrixSlider(params_frame, from_=1, to=2, number_of_steps=20)
         self.repeat_slider.set(1.1)
-        self.repeat_slider.grid(row=2, column=1, padx=10, pady=8, sticky="ew")
+        self.repeat_slider.grid(row=3, column=1, padx=10, pady=8, sticky="ew")
         self.repeat_label = MatrixLabel(params_frame, text="1.10", size="sm")
-        self.repeat_label.grid(row=2, column=2, padx=10, pady=8)
+        self.repeat_label.grid(row=3, column=2, padx=10, pady=8)
         self.repeat_slider.configure(command=lambda v: self.repeat_label.configure(text=f"{v:.2f}"))
         ctk.CTkLabel(params_frame, text="Penaliza repeticiones. 1.1 = normal",
                      font=ctk.CTkFont(family="Consolas", size=10), text_color=COLORS["text_muted"]
-                     ).grid(row=2, column=3, padx=10, pady=8, sticky="w")
+                     ).grid(row=3, column=3, padx=10, pady=8, sticky="w")
 
         # Context Length
-        MatrixLabel(params_frame, text="Context Length:", size="sm").grid(row=3, column=0, padx=10, pady=8, sticky="w")
+        MatrixLabel(params_frame, text="Context Length:", size="sm").grid(row=4, column=0, padx=10, pady=8, sticky="w")
         self.ctx_combo = MatrixComboBox(
             params_frame,
             values=["2048", "4096", "8192", "16384", "32768"],
             width=120
         )
         self.ctx_combo.set("4096")
-        self.ctx_combo.grid(row=3, column=1, padx=10, pady=8, sticky="w")
+        self.ctx_combo.grid(row=4, column=1, padx=10, pady=8, sticky="w")
         ctk.CTkLabel(params_frame, text="Mas contexto = mas memoria. 4096 suficiente",
                      font=ctk.CTkFont(family="Consolas", size=10), text_color=COLORS["text_muted"]
-                     ).grid(row=3, column=3, padx=10, pady=8, sticky="w")
+                     ).grid(row=4, column=3, padx=10, pady=8, sticky="w")
 
-        # ═══════════════════════════════════════════════════════════
+        # ===============================================================
         # STEP 4: CREAR MODELO
-        # ═══════════════════════════════════════════════════════════
+        # ===============================================================
         step4 = self._create_section(
             self.content, "PASO 4: CREAR MODELO EN OLLAMA",
             description="Revisa la configuracion y crea tu modelo. "
@@ -526,6 +643,7 @@ class ModelManagerPanel(ctk.CTkFrame):
             step_num=4
         )
         step4.pack(fill="x", pady=(0, 20))
+        self._step_widgets[4] = step4
 
         create_frame = ctk.CTkFrame(step4, fg_color="transparent")
         create_frame.pack(fill="x", padx=15, pady=15)
@@ -589,9 +707,50 @@ class ModelManagerPanel(ctk.CTkFrame):
         self.progress = MatrixProgressBar(self.progress_frame)
         self.progress.set(0)
 
-        # ═══════════════════════════════════════════════════════════
+        # ===============================================================
+        # IMPORT MODEL FROM REGISTRY
+        # ===============================================================
+        import_section = self._create_section(
+            self.content, "IMPORTAR MODELO DE OLLAMA REGISTRY",
+            description="Descarga un modelo directamente del registro de Ollama "
+                        "por nombre (ej: llama3.2, mistral, qwen2.5). "
+                        "Requiere conexion a internet."
+        )
+        import_section.pack(fill="x", pady=(0, 20))
+
+        import_frame = ctk.CTkFrame(import_section, fg_color="transparent")
+        import_frame.pack(fill="x", padx=15, pady=15)
+        import_frame.grid_columnconfigure(1, weight=1)
+
+        MatrixLabel(import_frame, text="Nombre del modelo:", size="sm").grid(
+            row=0, column=0, padx=10, pady=10, sticky="w"
+        )
+        self.pull_name_entry = MatrixEntry(
+            import_frame,
+            placeholder_text="llama3.2, mistral, qwen2.5...",
+            width=300
+        )
+        self.pull_name_entry.grid(row=0, column=1, padx=10, pady=10, sticky="w")
+
+        self.pull_btn = MatrixButton(
+            import_frame,
+            text=f"{DECORATIONS['arrow_r']} DESCARGAR",
+            height=35,
+            width=140,
+            primary=True,
+            command=self._pull_model
+        )
+        self.pull_btn.grid(row=0, column=2, padx=10, pady=10)
+
+        self.pull_status_label = MatrixLabel(import_frame, text="", size="sm")
+        self.pull_status_label.grid(row=1, column=0, columnspan=3, padx=10, sticky="w")
+
+        self.pull_progress = MatrixProgressBar(import_frame)
+        self.pull_progress.set(0)
+
+        # ===============================================================
         # MODELOS INSTALADOS
-        # ═══════════════════════════════════════════════════════════
+        # ===============================================================
         models_section = self._create_section(self.content, "MODELOS INSTALADOS EN OLLAMA")
         models_section.pack(fill="x", pady=(0, 20))
 
@@ -648,7 +807,6 @@ class ModelManagerPanel(ctk.CTkFrame):
             setattr(self, attr_name, indicator)
 
         title_col = 1 if step_num > 0 else 0
-        title_colspan = 1
 
         MatrixLabel(
             header,
@@ -691,6 +849,31 @@ class ModelManagerPanel(ctk.CTkFrame):
                 text_color=COLORS["text_muted"]
             )
 
+    def _scroll_to_step(self, step_num: int):
+        """Scroll the content area to bring the given step into view."""
+        widget = self._step_widgets.get(step_num)
+        if not widget:
+            return
+
+        def do_scroll():
+            try:
+                canvas = self.content._parent_canvas
+                canvas.update_idletasks()
+                # Get the widget's y position relative to the canvas content
+                widget_y = widget.winfo_y()
+                bbox = canvas.bbox("all")
+                if not bbox:
+                    return
+                total_h = bbox[3]
+                if total_h <= 0:
+                    return
+                # Scroll so the step is near the top with a small offset
+                frac = max(0.0, (widget_y - 10) / total_h)
+                canvas.yview_moveto(min(1.0, frac))
+            except Exception:
+                pass
+        self.after(50, do_scroll)
+
     @staticmethod
     def _sanitize_model_name(file_path: str) -> str:
         """Generate a valid Ollama model name from a GGUF filename.
@@ -714,9 +897,62 @@ class ModelManagerPanel(ctk.CTkFrame):
         stem = stem[:30].rstrip('-')
         return stem or "my-model"
 
+    def _validate_name_live(self, event=None):
+        """Validate model name as user types and show inline feedback"""
+        name = self.name_entry.get().strip()
+        if not name:
+            self.name_validation_label.configure(
+                text="Solo letras minusculas, numeros y guiones. Ej: dolphin-7b, llama3-code",
+                text_color=COLORS["text_muted"]
+            )
+            return
+
+        # Check for uppercase
+        if name != name.lower():
+            self.name_validation_label.configure(
+                text=f"{DECORATIONS['cross']} Solo minusculas. Se convertira a: {name.lower()}",
+                text_color=COLORS["warning"]
+            )
+            return
+
+        # Check for invalid characters
+        sanitized = re.sub(r'[^a-z0-9-]', '-', name.lower())
+        sanitized = re.sub(r'-{2,}', '-', sanitized).strip('-')
+        if sanitized != name:
+            self.name_validation_label.configure(
+                text=f"{DECORATIONS['cross']} Caracteres invalidos. Se usara: {sanitized}",
+                text_color=COLORS["warning"]
+            )
+            return
+
+        if len(name) > 100:
+            self.name_validation_label.configure(
+                text=f"{DECORATIONS['cross']} Nombre demasiado largo (max 100 caracteres)",
+                text_color=COLORS["error"]
+            )
+            return
+
+        # Valid
+        self.name_validation_label.configure(
+            text=f"{DECORATIONS['check']} Nombre valido",
+            text_color=COLORS["success"]
+        )
+
     def _on_file_selected(self, file_path: str):
         """Handle file selection"""
         self.selected_gguf_path = file_path
+
+        # Check for split GGUF and warn
+        split_info = detect_split_gguf(file_path)
+        if split_info and not split_info["all_complete"]:
+            missing = split_info["missing_parts"]
+            messagebox.showwarning(
+                "Archivo GGUF dividido",
+                f"Este archivo es la parte {split_info['part']} de {split_info['total']}.\n\n"
+                f"Faltan las partes: {', '.join(str(p) for p in missing)}.\n\n"
+                f"Descarga todas las partes y colocadas en la misma carpeta "
+                f"para que el modelo funcione correctamente."
+            )
 
         # Mark step 1 as completed and enable create button
         self._mark_step_completed(1)
@@ -726,6 +962,7 @@ class ModelManagerPanel(ctk.CTkFrame):
         suggested = self._sanitize_model_name(file_path)
         self.name_entry.delete(0, "end")
         self.name_entry.insert(0, suggested)
+        self._validate_name_live()
 
         # Auto-detect best system prompt based on model name
         filename_lower = Path(file_path).stem.lower()
@@ -748,6 +985,26 @@ class ModelManagerPanel(ctk.CTkFrame):
         if preset in SYSTEM_PROMPTS:
             self.system_prompt.delete("1.0", "end")
             self.system_prompt.insert("1.0", SYSTEM_PROMPTS[preset])
+
+    def _apply_param_preset(self, preset_name: str):
+        """Apply a parameter preset to all sliders"""
+        preset = PARAMETER_PRESETS.get(preset_name)
+        if not preset:
+            return
+
+        self.temp_slider.set(preset.temperature)
+        self.temp_label.configure(text=f"{preset.temperature:.2f}")
+        self.top_p_slider.set(preset.top_p)
+        self.top_p_label.configure(text=f"{preset.top_p:.2f}")
+        self.repeat_slider.set(preset.repeat_penalty)
+        self.repeat_label.configure(text=f"{preset.repeat_penalty:.2f}")
+        self.ctx_combo.set(str(preset.num_ctx))
+
+        self.status_label.configure(
+            text=f"{DECORATIONS['check']} Preset '{preset_name}' aplicado",
+            text_color=COLORS["matrix_green"]
+        )
+        self.after(2000, lambda: self.status_label.configure(text=""))
 
     def _preview_modelfile(self):
         """Show Modelfile preview"""
@@ -815,6 +1072,16 @@ class ModelManagerPanel(ctk.CTkFrame):
         self.name_entry.delete(0, "end")
         self.name_entry.insert(0, name)
 
+        # Warn about split files
+        split_info = detect_split_gguf(self.selected_gguf_path)
+        if split_info and not split_info["all_complete"]:
+            if not messagebox.askyesno(
+                "Archivo incompleto",
+                f"Faltan partes del archivo GGUF ({len(split_info['missing_parts'])} de {split_info['total']}).\n\n"
+                "El modelo probablemente no funcionara. Continuar de todos modos?"
+            ):
+                return
+
         params = ModelParameters(
             temperature=self.temp_slider.get(),
             top_p=self.top_p_slider.get(),
@@ -841,16 +1108,29 @@ class ModelManagerPanel(ctk.CTkFrame):
         self.create_btn.configure(state="disabled")
         self.progress.pack(fill="x", pady=(5, 0))
         self.progress.set(0)
-        self.status_label.configure(text=f"{DECORATIONS['block_med']} Creando modelo...")
+        self.status_label.configure(
+            text=f"{DECORATIONS['block_med']} Creando modelo...",
+            text_color=COLORS["matrix_green"]
+        )
 
         def do_create():
             progress_val = [0]
+            step_count = [0]
 
             def on_progress(status: str):
-                progress_val[0] = min(progress_val[0] + 0.05, 0.95)
-                self.after(0, lambda: self.status_label.configure(
-                    text=f"{DECORATIONS['block_med']} {status}"
-                ))
+                step_count[0] += 1
+                # Parse percentage from status if available
+                pct_match = re.search(r'(\d+)%', status)
+                if pct_match:
+                    progress_val[0] = int(pct_match.group(1)) / 100.0
+                else:
+                    progress_val[0] = min(progress_val[0] + 0.05, 0.95)
+
+                display = f"{DECORATIONS['block_med']} {status}"
+                if progress_val[0] > 0:
+                    display += f"  [{progress_val[0]*100:.0f}%]"
+
+                self.after(0, lambda: self.status_label.configure(text=display))
                 self.after(0, lambda: self.progress.set(progress_val[0]))
 
             success = self.ollama.create_model(name, modelfile_path, on_progress)
@@ -870,7 +1150,7 @@ class ModelManagerPanel(ctk.CTkFrame):
                         self.on_model_created(name)
                 else:
                     self.status_label.configure(
-                        text=f"{DECORATIONS['cross']} Error al crear modelo",
+                        text=f"{DECORATIONS['cross']} Error al crear modelo. Revisa que Ollama este corriendo.",
                         text_color=COLORS["error"]
                     )
 
@@ -878,16 +1158,73 @@ class ModelManagerPanel(ctk.CTkFrame):
 
         threading.Thread(target=do_create, daemon=True).start()
 
+    def _pull_model(self):
+        """Pull a model from Ollama registry"""
+        name = self.pull_name_entry.get().strip()
+        if not name:
+            messagebox.showwarning("Aviso", "Ingresa el nombre del modelo a descargar")
+            return
+
+        self.pull_btn.configure(state="disabled")
+        self.pull_progress.grid(row=2, column=0, columnspan=3, padx=10, pady=(0, 5), sticky="ew")
+        self.pull_progress.set(0)
+        self.pull_status_label.configure(
+            text=f"{DECORATIONS['block_med']} Descargando {name}...",
+            text_color=COLORS["warning"]
+        )
+
+        def do_pull():
+            def on_progress(status: str, pct: float):
+                display = f"{DECORATIONS['block_med']} {status}"
+                if pct > 0:
+                    display += f"  [{pct:.0f}%]"
+                self.after(0, lambda: self.pull_status_label.configure(text=display))
+                self.after(0, lambda: self.pull_progress.set(pct / 100.0))
+
+            success = self.ollama.pull_model(name, on_progress)
+
+            def on_complete():
+                self.pull_btn.configure(state="normal")
+                try:
+                    self.pull_progress.grid_forget()
+                except Exception:
+                    pass
+
+                if success:
+                    self.pull_status_label.configure(
+                        text=f"{DECORATIONS['check']} Modelo '{name}' descargado!",
+                        text_color=COLORS["success"]
+                    )
+                    self._refresh_models_list()
+                    if self.on_model_created:
+                        self.on_model_created(name)
+                else:
+                    self.pull_status_label.configure(
+                        text=f"{DECORATIONS['cross']} Error al descargar '{name}'. Verifica el nombre y tu conexion.",
+                        text_color=COLORS["error"]
+                    )
+
+            self.after(0, on_complete)
+
+        threading.Thread(target=do_pull, daemon=True).start()
+
     def _reset_form(self):
         """Reset the form"""
         self.drop_zone.reset()
         self.selected_gguf_path = None
         self.name_entry.delete(0, "end")
+        self.name_validation_label.configure(
+            text="Solo letras minusculas, numeros y guiones. Ej: dolphin-7b, llama3-code",
+            text_color=COLORS["text_muted"]
+        )
         self.system_prompt.delete("1.0", "end")
         self.prompt_preset.set("-- Seleccionar --")
         self.temp_slider.set(0.7)
+        self.temp_label.configure(text="0.70")
         self.top_p_slider.set(0.9)
+        self.top_p_label.configure(text="0.90")
         self.repeat_slider.set(1.1)
+        self.repeat_label.configure(text="1.10")
         self.ctx_combo.set("4096")
         self.status_label.configure(text="")
         # Reset step indicators and disable create button
@@ -896,12 +1233,19 @@ class ModelManagerPanel(ctk.CTkFrame):
         self.create_btn.configure(state="disabled")
 
     def _refresh_models_list(self):
-        """Refresh installed models list"""
+        """Refresh installed models list with detailed info"""
         for widget in self.models_list_frame.winfo_children():
             widget.destroy()
 
         def fetch():
             models = self.ollama.list_models()
+
+            # Try to get detailed info for each model via `ollama show`
+            model_details = {}
+            for model in models:
+                detail = self._get_model_details(model.name)
+                if detail:
+                    model_details[model.name] = detail
 
             def update():
                 if not models:
@@ -913,17 +1257,50 @@ class ModelManagerPanel(ctk.CTkFrame):
                     ).pack(anchor="w", pady=10)
                 else:
                     for model in models:
+                        details = model_details.get(model.name, {})
                         card = ModelCard(
                             self.models_list_frame,
                             model.name,
                             model.size_human,
-                            self._delete_model
+                            self._delete_model,
+                            quantization=details.get("quantization", ""),
+                            family=details.get("family", ""),
+                            params=details.get("parameters", ""),
                         )
                         card.pack(fill="x", pady=5)
 
             self.after(0, update)
 
         threading.Thread(target=fetch, daemon=True).start()
+
+    @staticmethod
+    def _get_model_details(model_name: str) -> dict:
+        """Get detailed model info via ollama show (runs in background thread)"""
+        import subprocess
+        details = {}
+        try:
+            result = subprocess.run(
+                ["ollama", "show", model_name],
+                capture_output=True, text=True, timeout=10
+            )
+            if result.returncode == 0:
+                for line in result.stdout.splitlines():
+                    line = line.strip()
+                    if line.startswith("family"):
+                        parts = line.split(None, 1)
+                        if len(parts) > 1:
+                            details["family"] = parts[1].strip()
+                    elif line.startswith("parameters"):
+                        parts = line.split(None, 1)
+                        if len(parts) > 1:
+                            details["parameters"] = parts[1].strip()
+                    elif line.startswith("quantization"):
+                        parts = line.split(None, 1)
+                        if len(parts) > 1:
+                            details["quantization"] = parts[1].strip()
+        except Exception:
+            pass
+        return details
 
     def _delete_model(self, name: str):
         """Delete a model"""

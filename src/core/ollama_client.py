@@ -1,13 +1,13 @@
 """Ollama API client wrapper"""
 import re
 import subprocess
-import json
 from typing import Optional, List, Generator, Callable
 from dataclasses import dataclass
 from pathlib import Path
 import threading
 
 from ..utils.logger import get_logger
+from ..utils.helpers import format_size
 log = get_logger("ollama_client")
 
 
@@ -37,12 +37,7 @@ class OllamaModel:
 
     @property
     def size_human(self) -> str:
-        size = self.size
-        for unit in ["B", "KB", "MB", "GB"]:
-            if size < 1024:
-                return f"{size:.1f} {unit}"
-            size /= 1024
-        return f"{size:.1f} TB"
+        return format_size(self.size)
 
 
 class OllamaClient:
@@ -55,6 +50,19 @@ class OllamaClient:
 
         if OLLAMA_AVAILABLE:
             self._client = ollama.Client(host=host)
+
+    def is_installed(self) -> bool:
+        """Check if the Ollama binary is installed on the system."""
+        try:
+            result = subprocess.run(
+                ["ollama", "--version"],
+                capture_output=True, text=True, timeout=5
+            )
+            return result.returncode == 0
+        except FileNotFoundError:
+            return False
+        except Exception:
+            return False
 
     def is_running(self) -> bool:
         """Check if Ollama server is running"""
@@ -73,6 +81,14 @@ class OllamaClient:
                 return result.returncode == 0
         except Exception:
             return False
+
+    def get_status(self) -> str:
+        """Get a descriptive status string: 'running', 'stopped', or 'not_installed'."""
+        if not self.is_installed():
+            return "not_installed"
+        if self.is_running():
+            return "running"
+        return "stopped"
 
     def start_server(self) -> bool:
         """Attempt to start Ollama server"""
@@ -268,26 +284,47 @@ class OllamaClient:
         stream: bool = True,
         options: Optional[dict] = None
     ) -> Generator[str, None, None]:
-        """Send chat message and stream response"""
-        try:
-            if self._client:
+        """Send chat message and stream response.
+
+        Raises on error instead of yielding error strings, so callers
+        (like chat_async) can distinguish tokens from failures.
+        """
+        if self._client:
+            try:
                 response = self._client.chat(
                     model=model,
                     messages=messages,
                     stream=stream,
                     options=options or {}
                 )
+            except Exception as e:
+                raise ConnectionError(f"Ollama chat failed: {e}") from e
 
-                if stream:
+            if stream:
+                try:
                     for chunk in response:
-                        content = chunk.get("message", {}).get("content", "")
+                        if isinstance(chunk, dict):
+                            content = chunk.get("message", {}).get("content", "")
+                        else:
+                            content = getattr(
+                                getattr(chunk, "message", None), "content", ""
+                            ) or ""
                         if content:
                             yield content
-                else:
-                    yield response.get("message", {}).get("content", "")
+                except Exception as e:
+                    # Server crashed or connection lost mid-stream
+                    log.error("Stream interrupted: %s", e)
+                    raise ConnectionError(f"Stream interrupted: {e}") from e
             else:
-                # Fallback without streaming
-                messages_json = json.dumps(messages)
+                if isinstance(response, dict):
+                    yield response.get("message", {}).get("content", "")
+                else:
+                    yield getattr(
+                        getattr(response, "message", None), "content", ""
+                    ) or ""
+        else:
+            # Fallback without streaming
+            try:
                 result = subprocess.run(
                     ["ollama", "run", model, messages[-1].get("content", "")],
                     capture_output=True,
@@ -296,8 +333,15 @@ class OllamaClient:
                 )
                 if result.returncode == 0:
                     yield result.stdout
-        except Exception as e:
-            yield f"Error: {e}"
+                else:
+                    raise RuntimeError(
+                        f"ollama run exited with code {result.returncode}: "
+                        f"{result.stderr.strip()}"
+                    )
+            except subprocess.TimeoutExpired:
+                raise TimeoutError(
+                    f"Model response timed out after {self.timeout}s"
+                )
 
     def chat_async(
         self,
@@ -310,7 +354,9 @@ class OllamaClient:
         cancel_event: Optional[threading.Event] = None
     ) -> threading.Thread:
         """Async chat that calls callbacks on token/complete/error.
+
         If cancel_event is provided and set, streaming stops immediately.
+        Handles mid-stream server crashes gracefully by calling on_error.
         """
         def run():
             try:
@@ -321,9 +367,15 @@ class OllamaClient:
                 if cancel_event and cancel_event.is_set():
                     return
                 on_complete()
+            except (ConnectionError, TimeoutError) as e:
+                if cancel_event and cancel_event.is_set():
+                    return
+                log.error("Chat stream error: %s", e)
+                on_error(str(e))
             except Exception as e:
                 if cancel_event and cancel_event.is_set():
                     return
+                log.error("Unexpected chat error: %s", e)
                 on_error(str(e))
 
         thread = threading.Thread(target=run, daemon=True)
