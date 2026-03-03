@@ -30,8 +30,8 @@ Built on top of [Ollama](https://ollama.ai), wrapped in a **Matrix-inspired term
     │  ● Ollama Online           │                  │ │
     │  → GPU: RTX 5060           │                  │ │
     │                            ├──────────────────┤ │
-    │  [⌨ CHAT] [⚙ FORGE]       │ ▸ INPUT:         │ │
-    │  [☰ SYS ] [? HELP ]       │ [_______________]│ │
+    │  [⌨ CHAT] [⚙ FORGE]        │ ▸ INPUT:         │ │
+    │  [☰ SYS ] [? HELP ]        │ [_______________]│ │
     │  [⌘ CFG ]                  │        [→ SEND]  │ │
     │                            │        [ CLEAR]  │ │
     │  ─────────────────         └──────────────────┘ │
