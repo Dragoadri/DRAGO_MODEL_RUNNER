@@ -27,14 +27,33 @@
   </pattern>
   <rect width="820" height="330" rx="8" fill="url(#sc)"/>
 
-  <!-- DRAGO ASCII Logo — centered with forced consistent width for cross-platform rendering -->
-  <g filter="url(#glow-lg)">
-    <text x="410" y="58"  text-anchor="middle" font-family="'Courier New','Liberation Mono','DejaVu Sans Mono',Consolas,monospace" font-size="15" fill="#00ff41" textLength="430" lengthAdjust="spacingAndGlyphs">██████╗ ██████╗  █████╗  ██████╗  ██████╗ </text>
-    <text x="410" y="76"  text-anchor="middle" font-family="'Courier New','Liberation Mono','DejaVu Sans Mono',Consolas,monospace" font-size="15" fill="#00ff41" textLength="430" lengthAdjust="spacingAndGlyphs">██╔══██╗██╔══██╗██╔══██╗██╔════╝ ██╔═══██╗</text>
-    <text x="410" y="94"  text-anchor="middle" font-family="'Courier New','Liberation Mono','DejaVu Sans Mono',Consolas,monospace" font-size="15" fill="#00ff41" textLength="430" lengthAdjust="spacingAndGlyphs">██║  ██║██████╔╝███████║██║  ███╗██║   ██║</text>
-    <text x="410" y="112" text-anchor="middle" font-family="'Courier New','Liberation Mono','DejaVu Sans Mono',Consolas,monospace" font-size="15" fill="#00ff41" textLength="430" lengthAdjust="spacingAndGlyphs">██║  ██║██╔══██╗██╔══██║██║   ██║██║   ██║</text>
-    <text x="410" y="130" text-anchor="middle" font-family="'Courier New','Liberation Mono','DejaVu Sans Mono',Consolas,monospace" font-size="15" fill="#00ff41" textLength="430" lengthAdjust="spacingAndGlyphs">██████╔╝██║  ██║██║  ██║╚██████╔╝╚██████╔╝</text>
-    <text x="410" y="148" text-anchor="middle" font-family="'Courier New','Liberation Mono','DejaVu Sans Mono',Consolas,monospace" font-size="15" fill="#00ff41" textLength="430" lengthAdjust="spacingAndGlyphs">╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝  ╚═════╝ </text>
+  <!--
+    DRAGO Block Letters — pure SVG geometry, no font dependency.
+    Grid: 6 cols × 5 rows per letter, cell 11×18px, 20px gap between letters.
+    Letters span x=205..615 (410px), y=50..140 (90px), centered in 820px viewBox.
+  -->
+
+  <!-- Shadow layer (offset 2,2 for depth) -->
+  <g fill="#002200" opacity="0.5" transform="translate(2,2)">
+    <path d="M205,50h55v18h-55z M205,68h22v54h-22z M249,68h22v54h-22z M205,122h55v18h-55z"/>
+    <path d="M291,50h55v18h-55z M291,68h22v72h-22z M335,68h22v18h-22z M313,86h33v18h-33z M324,104h22v18h-22z M335,122h22v18h-22z"/>
+    <path d="M388,50h44v18h-44z M377,68h22v72h-22z M421,68h22v72h-22z M399,86h22v18h-22z"/>
+    <path d="M474,50h55v18h-55z M463,68h22v54h-22z M496,86h33v18h-33z M507,104h22v18h-22z M474,122h55v18h-55z"/>
+    <path d="M560,50h44v18h-44z M549,68h22v54h-22z M593,68h22v54h-22z M560,122h44v18h-44z"/>
+  </g>
+
+  <!-- Main DRAGO letters with glow -->
+  <g filter="url(#glow-lg)" fill="#00ff41">
+    <!-- D -->
+    <path d="M205,50h55v18h-55z M205,68h22v54h-22z M249,68h22v54h-22z M205,122h55v18h-55z"/>
+    <!-- R -->
+    <path d="M291,50h55v18h-55z M291,68h22v72h-22z M335,68h22v18h-22z M313,86h33v18h-33z M324,104h22v18h-22z M335,122h22v18h-22z"/>
+    <!-- A -->
+    <path d="M388,50h44v18h-44z M377,68h22v72h-22z M421,68h22v72h-22z M399,86h22v18h-22z"/>
+    <!-- G -->
+    <path d="M474,50h55v18h-55z M463,68h22v54h-22z M496,86h33v18h-33z M507,104h22v18h-22z M474,122h55v18h-55z"/>
+    <!-- O -->
+    <path d="M560,50h44v18h-44z M549,68h22v54h-22z M593,68h22v54h-22z M560,122h44v18h-44z"/>
   </g>
 
   <!-- Separator -->
