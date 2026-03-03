@@ -27,14 +27,14 @@
   </pattern>
   <rect width="820" height="330" rx="8" fill="url(#sc)"/>
 
-  <!-- DRAGO ASCII Logo — left-aligned from fixed X so monospace stays aligned -->
-  <g filter="url(#glow-lg)" xml:space="preserve">
-    <text x="195" y="58"  font-family="Consolas,'Courier New',monospace" font-size="15" fill="#00ff41">██████╗ ██████╗  █████╗  ██████╗  ██████╗ </text>
-    <text x="195" y="76"  font-family="Consolas,'Courier New',monospace" font-size="15" fill="#00ff41">██╔══██╗██╔══██╗██╔══██╗██╔════╝ ██╔═══██╗</text>
-    <text x="195" y="94"  font-family="Consolas,'Courier New',monospace" font-size="15" fill="#00ff41">██║  ██║██████╔╝███████║██║  ███╗██║   ██║</text>
-    <text x="195" y="112" font-family="Consolas,'Courier New',monospace" font-size="15" fill="#00ff41">██║  ██║██╔══██╗██╔══██║██║   ██║██║   ██║</text>
-    <text x="195" y="130" font-family="Consolas,'Courier New',monospace" font-size="15" fill="#00ff41">██████╔╝██║  ██║██║  ██║╚██████╔╝╚██████╔╝</text>
-    <text x="195" y="148" font-family="Consolas,'Courier New',monospace" font-size="15" fill="#00ff41">╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝  ╚═════╝ </text>
+  <!-- DRAGO ASCII Logo — centered with forced consistent width for cross-platform rendering -->
+  <g filter="url(#glow-lg)">
+    <text x="410" y="58"  text-anchor="middle" font-family="'Courier New','Liberation Mono','DejaVu Sans Mono',Consolas,monospace" font-size="15" fill="#00ff41" textLength="430" lengthAdjust="spacingAndGlyphs">██████╗ ██████╗  █████╗  ██████╗  ██████╗ </text>
+    <text x="410" y="76"  text-anchor="middle" font-family="'Courier New','Liberation Mono','DejaVu Sans Mono',Consolas,monospace" font-size="15" fill="#00ff41" textLength="430" lengthAdjust="spacingAndGlyphs">██╔══██╗██╔══██╗██╔══██╗██╔════╝ ██╔═══██╗</text>
+    <text x="410" y="94"  text-anchor="middle" font-family="'Courier New','Liberation Mono','DejaVu Sans Mono',Consolas,monospace" font-size="15" fill="#00ff41" textLength="430" lengthAdjust="spacingAndGlyphs">██║  ██║██████╔╝███████║██║  ███╗██║   ██║</text>
+    <text x="410" y="112" text-anchor="middle" font-family="'Courier New','Liberation Mono','DejaVu Sans Mono',Consolas,monospace" font-size="15" fill="#00ff41" textLength="430" lengthAdjust="spacingAndGlyphs">██║  ██║██╔══██╗██╔══██║██║   ██║██║   ██║</text>
+    <text x="410" y="130" text-anchor="middle" font-family="'Courier New','Liberation Mono','DejaVu Sans Mono',Consolas,monospace" font-size="15" fill="#00ff41" textLength="430" lengthAdjust="spacingAndGlyphs">██████╔╝██║  ██║██║  ██║╚██████╔╝╚██████╔╝</text>
+    <text x="410" y="148" text-anchor="middle" font-family="'Courier New','Liberation Mono','DejaVu Sans Mono',Consolas,monospace" font-size="15" fill="#00ff41" textLength="430" lengthAdjust="spacingAndGlyphs">╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝  ╚═════╝ </text>
   </g>
 
   <!-- Separator -->
@@ -44,13 +44,13 @@
 
   <!-- Subtitle -->
   <g filter="url(#glow)">
-    <text x="410" y="200" text-anchor="middle" font-family="Consolas,'Courier New',monospace" font-size="15" fill="#00ff41" letter-spacing="6">M O D E L   R U N N E R</text>
-    <text x="410" y="222" text-anchor="middle" font-family="Consolas,'Courier New',monospace" font-size="11" fill="#00cc33" letter-spacing="3">// M A T R I X   E D I T I O N</text>
+    <text x="410" y="200" text-anchor="middle" font-family="'Courier New','Liberation Mono','DejaVu Sans Mono',Consolas,monospace" font-size="15" fill="#00ff41" letter-spacing="6">M O D E L   R U N N E R</text>
+    <text x="410" y="222" text-anchor="middle" font-family="'Courier New','Liberation Mono','DejaVu Sans Mono',Consolas,monospace" font-size="11" fill="#00cc33" letter-spacing="3">// M A T R I X   E D I T I O N</text>
   </g>
 
   <!-- Tags -->
-  <text x="410" y="258" text-anchor="middle" font-family="Consolas,'Courier New',monospace" font-size="12" fill="#008f11">[ LOCAL LLM INFERENCE INTERFACE ]</text>
-  <text x="410" y="278" text-anchor="middle" font-family="Consolas,'Courier New',monospace" font-size="11" fill="#006622">NO CLOUD  ·  NO CENSORSHIP  ·  NO LIMITS</text>
+  <text x="410" y="258" text-anchor="middle" font-family="'Courier New','Liberation Mono','DejaVu Sans Mono',Consolas,monospace" font-size="12" fill="#008f11">[ LOCAL LLM INFERENCE INTERFACE ]</text>
+  <text x="410" y="278" text-anchor="middle" font-family="'Courier New','Liberation Mono','DejaVu Sans Mono',Consolas,monospace" font-size="11" fill="#006622">NO CLOUD  ·  NO CENSORSHIP  ·  NO LIMITS</text>
 
   <!-- Bottom bar decoration -->
   <rect x="30" y="304" width="760" height="1" fill="#004411" opacity="0.5"/>
