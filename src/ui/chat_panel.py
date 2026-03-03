@@ -132,18 +132,20 @@ class RichMessageContent(ctk.CTkFrame):
     Uses CTkTextbox in disabled state for code blocks with a distinct
     background, CTkLabel for text with bold/normal formatting, etc."""
 
-    def __init__(self, parent, content: str, text_color: str, is_user: bool = False, **kwargs):
+    def __init__(self, parent, content: str, text_color: str, is_user: bool = False,
+                 lightweight: bool = False, **kwargs):
         kwargs.setdefault("fg_color", "transparent")
         super().__init__(parent, **kwargs)
         self.grid_columnconfigure(0, weight=1)
         self._text_color = text_color
         self._is_user = is_user
+        self._lightweight = lightweight
         self._widgets = []
         self._content = content
 
-        if is_user:
-            # User messages: plain text, no markdown parsing
-            self._render_plain(content)
+        if is_user or lightweight:
+            # User messages or lightweight history: single label, no rich widgets
+            self._render_plain(parse_markdown_simple(content) if lightweight else content)
         else:
             self._render_rich(content)
 
@@ -156,7 +158,7 @@ class RichMessageContent(ctk.CTkFrame):
             text_color=self._text_color,
             anchor="nw",
             justify="left",
-            wraplength=1,
+            wraplength=600,
         )
         lbl.grid(row=0, column=0, sticky="ew")
         self._widgets.append(lbl)
@@ -185,7 +187,7 @@ class RichMessageContent(ctk.CTkFrame):
                     text_color=COLORS["matrix_green_bright"],
                     anchor="nw",
                     justify="left",
-                    wraplength=1,
+                    wraplength=600,
                 )
                 lbl.grid(row=row, column=0, sticky="ew", pady=(6, 2))
                 self._widgets.append(lbl)
@@ -245,7 +247,7 @@ class RichMessageContent(ctk.CTkFrame):
             text_color=self._text_color,
             anchor="nw",
             justify="left",
-            wraplength=1,
+            wraplength=600,
         )
         self._setup_wrap(lbl)
         return lbl
@@ -371,7 +373,7 @@ class RichMessageContent(ctk.CTkFrame):
                 text_color=self._text_color,
                 anchor="nw",
                 justify="left",
-                wraplength=1,
+                wraplength=600,
             )
             lbl.grid(row=0, column=0, sticky="ew")
             self._widgets.append(lbl)
@@ -447,9 +449,11 @@ class TypingIndicator(ctk.CTkFrame):
 class ChatMessage(ctk.CTkFrame):
     """Matrix-styled chat message bubble with rich content, copy, and translate"""
 
-    def __init__(self, parent, role: str, content: str, timestamp: str = None, **kwargs):
+    def __init__(self, parent, role: str, content: str, timestamp: str = None,
+                 lightweight: bool = False, **kwargs):
         self.role = role
         self.raw_content = content
+        self._lightweight = lightweight
         is_user = role == "user"
 
         if is_user:
@@ -530,7 +534,7 @@ class ChatMessage(ctk.CTkFrame):
         self._translate_target = "en"
         self._typing = None
 
-        if role == "assistant":
+        if role == "assistant" and not lightweight:
             self.translate_btn = ctk.CTkButton(
                 header,
                 text="TRADUCIR",
@@ -560,6 +564,7 @@ class ChatMessage(ctk.CTkFrame):
             content=content,
             text_color=self._content_color,
             is_user=is_user,
+            lightweight=lightweight,
         )
         self.content_widget.grid(row=2, column=0, sticky="ew", padx=12, pady=(4, 8))
 
@@ -1486,26 +1491,50 @@ class ChatPanel(ctk.CTkFrame):
             self._welcome_widget.destroy()
 
         self._current_chat = chat_data
+        msgs = chat_data.get("messages", [])
 
-        for msg in chat_data.get("messages", []):
-            widget = ChatMessage(self.messages_frame, msg["role"], msg["content"])
-            widget.pack(fill="x", pady=8, padx=5)
-            self.message_widgets.append(widget)
-            self.messages.append(msg)
-            if msg["role"] == "assistant" and self._translator:
-                widget._translator = self._translator
-                widget._translate_source = self._translate_source
-                widget._translate_target = self._translate_target
-
-        if not chat_data.get("messages"):
-            self._show_welcome()
+        # Copy message data immediately so it's always available
+        self.messages.extend(msgs)
 
         if chat_data.get("system_prompt"):
             self._system_prompt = chat_data["system_prompt"]
 
-        self._set_status("ready", "Chat loaded")
-        self._update_token_count()
-        self.after(50, self._scroll_to_bottom)
+        if not msgs:
+            self._show_welcome()
+            self._set_status("ready", "Chat loaded")
+            self._update_token_count()
+            return
+
+        # Render messages progressively with lightweight mode to avoid X11
+        # BadAlloc (pixmap exhaustion) on HiDPI+NVIDIA displays.
+        self._set_status("loading", f"Cargando {len(msgs)} mensajes...")
+        self._render_messages_deferred(msgs, 0)
+
+    def _render_messages_deferred(self, msgs: list, index: int, batch: int = 3):
+        """Render historical messages progressively with lightweight widgets.
+
+        Uses simplified rendering (single label per message, no code-block
+        CTkTextbox) to dramatically reduce X11 pixmap allocation, preventing
+        BadAlloc crashes on HiDPI + NVIDIA glamor.
+        """
+        end = min(index + batch, len(msgs))
+        for i in range(index, end):
+            msg = msgs[i]
+            widget = ChatMessage(
+                self.messages_frame, msg["role"], msg["content"],
+                lightweight=True,
+            )
+            widget.pack(fill="x", pady=8, padx=5)
+            self.message_widgets.append(widget)
+
+        if end < len(msgs):
+            remaining = len(msgs) - end
+            self._set_status("loading", f"Cargando mensajes... ({remaining} restantes)")
+            self.after(150, lambda: self._render_messages_deferred(msgs, end, batch))
+        else:
+            self._set_status("ready", "Chat loaded")
+            self._update_token_count()
+            self.after(50, self._scroll_to_bottom)
 
     def get_current_chat(self) -> Optional[dict]:
         """Get current chat data with latest messages."""

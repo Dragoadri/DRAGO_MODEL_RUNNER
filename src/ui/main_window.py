@@ -357,6 +357,8 @@ class Sidebar(ctk.CTkFrame):
         """Set callback for model selection"""
         self.model_combo.configure(command=callback)
 
+    _CHAT_LIST_PAGE = 50  # max items rendered at once
+
     def update_chat_list(self, chats: list, active_id: str = None):
         """Update the chat list display.
 
@@ -370,6 +372,38 @@ class Sidebar(ctk.CTkFrame):
 
         self._chat_items = {}
 
+        # Always ensure the active chat is visible
+        visible = list(chats[:self._CHAT_LIST_PAGE])
+        if active_id and active_id not in {c["id"] for c in visible}:
+            for c in chats:
+                if c["id"] == active_id:
+                    visible.append(c)
+                    break
+
+        for chat in visible:
+            item = self._create_chat_item(chat, is_active=(chat["id"] == active_id))
+            item.pack(fill="x", pady=2, padx=4)
+            self._chat_items[chat["id"]] = item
+
+        if len(chats) > self._CHAT_LIST_PAGE:
+            remaining = len(chats) - self._CHAT_LIST_PAGE
+            more_btn = ctk.CTkButton(
+                self.chat_list_frame,
+                text=f"▼ {remaining} más...",
+                fg_color="transparent",
+                text_color=COLORS["matrix_green_dim"],
+                hover_color=COLORS["bg_secondary"],
+                font=ctk.CTkFont(family="Consolas", size=11),
+                height=28,
+                command=lambda: self.update_chat_list_all(chats, active_id),
+            )
+            more_btn.pack(fill="x", pady=2, padx=4)
+
+    def update_chat_list_all(self, chats: list, active_id: str = None):
+        """Render the full chat list (called when user explicitly expands)."""
+        for widget in self.chat_list_frame.winfo_children():
+            widget.destroy()
+        self._chat_items = {}
         for chat in chats:
             item = self._create_chat_item(chat, is_active=(chat["id"] == active_id))
             item.pack(fill="x", pady=2, padx=4)
@@ -529,6 +563,20 @@ class MainWindow(ctk.CTk):
         # to CTk.__init__ so Tk sets it at window-creation time.
         super().__init__(className='drago-model-runner')
 
+        # CRITICAL: Override Tk's automatic DPI scaling BEFORE any widget creation.
+        # On 144 DPI displays, Tk sets internal scaling to 2.0 (144/72), allocating
+        # all pixmaps at 4x area.  The NVIDIA glamor driver has a pixmap budget that
+        # gets exhausted, causing X_CreatePixmap BadAlloc crashes.
+        # Setting to 1.0 keeps pixmaps at normal size; CTk handles visual scaling
+        # independently via set_widget_scaling().
+        try:
+            tk_scaling = float(self.tk.call('tk', 'scaling'))
+            if tk_scaling > 1.5:
+                self.tk.call('tk', 'scaling', 1.0)
+                log.info("Reduced tk scaling from %.1f to 1.0 (X11 pixmap safety)", tk_scaling)
+        except Exception:
+            pass
+
         # Reinforce WM_CLASS for GNOME/KDE dock icon matching
         try:
             self.tk.call('tk', 'appname', 'drago-model-runner')
@@ -660,7 +708,16 @@ class MainWindow(ctk.CTk):
             if self._geo_file.exists():
                 geo = self._geo_file.read_text().strip()
                 if re.match(r'^\d+x\d+[+\-]\d+[+\-]\d+$', geo):
-                    self.geometry(geo)
+                    m = re.match(r'^(\d+)x(\d+)', geo)
+                    if m:
+                        w, h = int(m.group(1)), int(m.group(2))
+                        screen_w = self.winfo_screenwidth()
+                        screen_h = self.winfo_screenheight()
+                        if w < screen_w and h < screen_h:
+                            self.geometry(geo)
+                        else:
+                            log.warning(f"Saved geometry {w}x{h} exceeds screen {screen_w}x{screen_h}, ignoring")
+                            self._geo_file.unlink(missing_ok=True)
         except Exception:
             log.warning("Could not load window geometry")
 
@@ -743,7 +800,7 @@ class MainWindow(ctk.CTk):
         self._generation_id: int = 0
         self._generation_lock = threading.Lock()
 
-        # Create panels
+        # Create panels — only chat panel at startup; others are lazy-loaded
         self.chat_panel = ChatPanel(
             self.content_frame,
             on_send=self._on_chat_send,
@@ -752,22 +809,11 @@ class MainWindow(ctk.CTk):
         self.chat_panel.set_chat_callback(self._on_chat_data_updated)
         self.chat_panel.max_context_messages = self.max_context_messages
 
-        self.models_panel = ModelManagerPanel(
-            self.content_frame,
-            self.ollama,
-            self.gguf_manager,
-            on_model_created=self._on_model_created
-        )
-
-        self.system_panel = SystemPanel(self.content_frame)
-
-        self.help_panel = HelpPanel(self.content_frame)
-
-        self.settings_panel = SettingsPanel(
-            self.content_frame,
-            self.config_path,
-            on_settings_changed=self._on_settings_changed
-        )
+        # Lazy panels — created on first visit to reduce X11 pixmap usage at startup
+        self.models_panel = None
+        self.system_panel = None
+        self.help_panel = None
+        self.settings_panel = None
 
         # Show chat by default
         self._show_panel("chat")
@@ -975,24 +1021,51 @@ class MainWindow(ctk.CTk):
         else:
             self._show_panel(panel_name)
 
+    def _get_or_create_panel(self, name: str):
+        """Return panel, creating it lazily on first access."""
+        if name == "models":
+            if self.models_panel is None:
+                self.models_panel = ModelManagerPanel(
+                    self.content_frame,
+                    self.ollama,
+                    self.gguf_manager,
+                    on_model_created=self._on_model_created,
+                )
+            return self.models_panel
+        if name == "system":
+            if self.system_panel is None:
+                self.system_panel = SystemPanel(self.content_frame)
+            return self.system_panel
+        if name == "help":
+            if self.help_panel is None:
+                self.help_panel = HelpPanel(self.content_frame)
+            return self.help_panel
+        if name == "settings":
+            if self.settings_panel is None:
+                self.settings_panel = SettingsPanel(
+                    self.content_frame,
+                    self.config_path,
+                    on_settings_changed=self._on_settings_changed,
+                )
+            return self.settings_panel
+        return None
+
     def _show_panel(self, panel_name: str):
-        """Show specified panel"""
+        """Show specified panel, creating it lazily if needed."""
+        # Hide chat panel always
         self.chat_panel.grid_remove()
-        self.models_panel.grid_remove()
-        self.system_panel.grid_remove()
-        self.help_panel.grid_remove()
-        self.settings_panel.grid_remove()
+        # Hide already-created lazy panels
+        for panel in (self.models_panel, self.system_panel,
+                      self.help_panel, self.settings_panel):
+            if panel is not None:
+                panel.grid_remove()
 
-        panels = {
-            "chat": self.chat_panel,
-            "models": self.models_panel,
-            "system": self.system_panel,
-            "help": self.help_panel,
-            "settings": self.settings_panel,
-        }
-
-        if panel_name in panels:
-            panels[panel_name].grid(row=0, column=0, sticky="nsew")
+        if panel_name == "chat":
+            self.chat_panel.grid(row=0, column=0, sticky="nsew")
+        else:
+            panel = self._get_or_create_panel(panel_name)
+            if panel is not None:
+                panel.grid(row=0, column=0, sticky="nsew")
 
     def _on_model_selected(self, model_name: str):
         """Handle model selection and load its system prompt"""

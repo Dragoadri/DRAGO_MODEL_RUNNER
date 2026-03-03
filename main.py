@@ -90,6 +90,7 @@ def main():
     print()
 
     # Create and run main window
+    # NOTE: tk scaling override is in MainWindow.__init__(), before widget creation
     app = MainWindow(config_path)
 
     # Handle window close
